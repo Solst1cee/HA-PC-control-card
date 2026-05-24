@@ -28,6 +28,7 @@ const CARD_VERSION = '1.0.1';
 //   resolve when the sensor flips, or expire after a timeout.
 
 const PENDING_TIMEOUT_MS = 90_000;
+const RESTART_TIMEOUT_MS = 300_000; // NAS reboots are slower than a PC boot
 const SLEEP_DISPLAY_MS   = 6_000;
 const ARM_TIMEOUT_MS     = 2_400;
 
@@ -36,7 +37,8 @@ const META = {
   on:       { label: 'On',            tone: 'live',  pulse: false },
   sleeping: { label: 'Sleeping',      tone: 'warm',  pulse: false },
   booting:  { label: 'Booting',       tone: 'warm',  pulse: true  },
-  shutting: { label: 'Shutting down', tone: 'alert', pulse: true  },
+  shutting:   { label: 'Shutting down', tone: 'alert', pulse: true  },
+  restarting: { label: 'Restarting',    tone: 'warm',  pulse: true  },
   waking:   { label: 'Waking',        tone: 'warm',  pulse: true  },
 };
 
@@ -449,6 +451,7 @@ const STYLES = `
 const ICONS = {
   power: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v8"/><path d="M5.6 7.6a8 8 0 1 0 12.8 0"/></svg>',
   moon:  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>',
   pc:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>',
   spinner: '<svg class="spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.18"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
 };
@@ -461,7 +464,8 @@ class PcControlCard extends HTMLElement {
     this.attachShadow({ mode: 'open' });
     this._pending = null;     // 'on' | 'sleep' | 'shutdown'
     this._pendingSince = 0;
-    this._armed = { sleep: false, shutdown: false };
+    this._armed = { sleep: false, shutdown: false, restart: false };
+    this._restartDipped = false;
     this._armTimers = {};
     this._sleepTimer = null;
     this._tickTimer = null;
@@ -480,11 +484,14 @@ class PcControlCard extends HTMLElement {
       uptime_entity: null,
       turn_on: null,
       sleep: null,
+      restart: null,
       shutdown: null,
       confirm_shutdown: true,
       confirm_sleep: false,
+      confirm_restart: true,
       show_turn_on: true,
       show_sleep: true,
+      show_restart: false,
       show_shutdown: true,
       show_cpu_usage: true,
       show_cpu_temp:  false,
@@ -500,6 +507,7 @@ class PcControlCard extends HTMLElement {
     this._actions = {
       turn_on:  parseAction(this._config.turn_on),
       sleep:    parseAction(this._config.sleep),
+      restart:  parseAction(this._config.restart),
       shutdown: parseAction(this._config.shutdown),
     };
     this._build();
@@ -514,7 +522,14 @@ class PcControlCard extends HTMLElement {
       const elapsed = Date.now() - this._pendingSince;
       if (this._pending === 'on'       && s === 'on'  ) this._clearPending();
       if (this._pending === 'shutdown' && s === 'off' ) this._clearPending();
-      if (elapsed > PENDING_TIMEOUT_MS) this._clearPending();
+      if (this._pending === 'restart') {
+        // Reboot takes the box down (off/unavailable) then back to on.
+        if (s !== 'on') this._restartDipped = true;
+        if (this._restartDipped && s === 'on') this._clearPending();
+        if (elapsed > RESTART_TIMEOUT_MS) this._clearPending();
+      } else if (elapsed > PENDING_TIMEOUT_MS) {
+        this._clearPending();
+      }
     }
     this._update();
   }
@@ -569,6 +584,7 @@ class PcControlCard extends HTMLElement {
     const s = this._hass?.states[this._config.status_entity]?.state;
     if (this._pending === 'on')       return 'booting';
     if (this._pending === 'shutdown') return 'shutting';
+    if (this._pending === 'restart')  return 'restarting';
     if (this._pending === 'sleep')    return 'sleeping';
     if (s === 'on')  return 'on';
     return 'off';
@@ -719,6 +735,18 @@ class PcControlCard extends HTMLElement {
     this._setPending('shutdown');
     this._callAction('shutdown');
   }
+  _onRestart() {
+    if (this._derivedStatus() !== 'on' || this._pending) return;
+    if (!this._actions.restart) return;
+    if (this._config.confirm_restart && !this._armed.restart) {
+      this._arm('restart');
+      return;
+    }
+    this._disarm('restart');
+    this._restartDipped = false;
+    this._setPending('restart');
+    this._callAction('restart');
+  }
 
   _arm(name) {
     this._armed[name] = true;
@@ -766,6 +794,7 @@ class PcControlCard extends HTMLElement {
     }
     $('.btn-on').addEventListener('click', () => this._onTurnOn());
     $('.btn-sleep').addEventListener('click', () => this._onSleep());
+    $('.btn-restart').addEventListener('click', () => this._onRestart());
     $('.btn-shutdown').addEventListener('click', () => this._onShutdown());
 
     // Tick uptime + animations.
@@ -794,10 +823,13 @@ class PcControlCard extends HTMLElement {
     // the entire actions row + adjust the previous section's bottom
     // padding so the card has equal side/bottom gaps when buttons are
     // hidden (behaves like a pure status monitor).
-    const anyBtn =
-      this._config.show_turn_on  !== false ||
-      this._config.show_sleep    !== false ||
-      this._config.show_shutdown !== false;
+    const vis = {
+      on:       this._config.show_turn_on  !== false,
+      sleep:    this._config.show_sleep    !== false,
+      restart:  !!this._config.show_restart,
+      shutdown: this._config.show_shutdown !== false,
+    };
+    const anyBtn = vis.on || vis.sleep || vis.restart || vis.shutdown;
     root.classList.toggle('no-actions', !anyBtn);
 
     // Name + status text
@@ -911,15 +943,17 @@ class PcControlCard extends HTMLElement {
     // Button states
     const onBtn = root.querySelector('.btn-on');
     const sleepBtn = root.querySelector('.btn-sleep');
+    const restartBtn = root.querySelector('.btn-restart');
     const shutBtn = root.querySelector('.btn-shutdown');
 
     // Show/hide each action button per config. Remaining buttons fill
     // the row via flex: 1. The actions row + chip divider are hidden
     // by the .no-actions class on .card (set above), so no inline
     // style override is needed for them — only the individual buttons.
-    onBtn.style.display    = this._config.show_turn_on  === false ? 'none' : '';
-    sleepBtn.style.display = this._config.show_sleep    === false ? 'none' : '';
-    shutBtn.style.display  = this._config.show_shutdown === false ? 'none' : '';
+    onBtn.style.display      = vis.on       ? '' : 'none';
+    sleepBtn.style.display   = vis.sleep    ? '' : 'none';
+    restartBtn.style.display = vis.restart  ? '' : 'none';
+    shutBtn.style.display    = vis.shutdown ? '' : 'none';
 
     const off  = status === 'off';
     const on   = status === 'on';
@@ -941,6 +975,14 @@ class PcControlCard extends HTMLElement {
       iconKey: 'moon',
       label: 'Sleep',
       armedLabel: this._config.confirm_sleep ? 'Confirm?' : null,
+    });
+    setBtn(restartBtn, {
+      disabled: !on || pend,
+      busy: this._pending === 'restart',
+      armed: this._armed.restart,
+      iconKey: 'restart',
+      label: 'Restart',
+      armedLabel: this._config.confirm_restart ? 'Confirm?' : null,
     });
     setBtn(shutBtn, {
       disabled: off || pend,
@@ -975,6 +1017,7 @@ const TEMPLATES = {
       <div class="actions">
         <button class="btn btn-on compact" title="Turn on"></button>
         <button class="btn btn-sleep compact" title="Sleep"></button>
+        <button class="btn btn-restart compact" title="Restart"></button>
         <button class="btn btn-shutdown danger compact" title="Shut down"></button>
       </div>
     </ha-card>
@@ -1013,6 +1056,7 @@ const TEMPLATES = {
       <div class="actions">
         <button class="btn btn-on" title="Turn on"></button>
         <button class="btn btn-sleep" title="Sleep"></button>
+        <button class="btn btn-restart" title="Restart"></button>
         <button class="btn btn-shutdown danger" title="Shut down"></button>
       </div>
     </ha-card>
@@ -1040,6 +1084,7 @@ const TEMPLATES = {
       <div class="actions">
         <button class="btn btn-on" title="Turn on"></button>
         <button class="btn btn-sleep" title="Sleep"></button>
+        <button class="btn btn-restart" title="Restart"></button>
         <button class="btn btn-shutdown danger" title="Shut down"></button>
       </div>
     </ha-card>
