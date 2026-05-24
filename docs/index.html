@@ -298,6 +298,7 @@
       <div class="seg" id="buttons-seg">
         <button data-btn="turn_on" class="active">Turn on</button>
         <button data-btn="sleep" class="active">Sleep</button>
+        <button data-btn="restart">Restart</button>
         <button data-btn="shutdown" class="active">Shut down</button>
       </div>
 
@@ -369,7 +370,12 @@
     'binary_sensor.pc_status':      { state: 'on',  changed: -1000*60*60*27 - 1000*60*13, attrs: {} },
     'switch.my_pc':                 { state: 'on',  changed: -1000*60*60*27, attrs: {} },
     'button.my_pc_sleep':           { state: 'unknown', changed: 0, attrs: {} },
+    'button.my_pc_restart':         { state: 'unknown', changed: 0, attrs: {} },
     'button.my_pc_shutdown':        { state: 'unknown', changed: 0, attrs: {} },
+    'sensor.my_pc_drive1_status':   { state: 'normal',  changed: 0, attrs: {} },
+    'sensor.my_pc_drive1_temp':     { state: '36', changed: 0, attrs: { unit_of_measurement: '°C' } },
+    'sensor.my_pc_drive2_status':   { state: 'normal',  changed: 0, attrs: {} },
+    'sensor.my_pc_drive2_temp':     { state: '41', changed: 0, attrs: { unit_of_measurement: '°C' } },
     'sensor.my_pc_cpu_percent':     { state: '18',  changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.my_pc_cpu_temp':        { state: '54',  changed: 0, attrs: { unit_of_measurement: '°C' } },
     'sensor.my_pc_ram_percent':     { state: '42',  changed: 0, attrs: { unit_of_measurement: '%' } },
@@ -432,6 +438,12 @@
         if (ent?.includes('shutdown')) {
           clearTimeout(pendingShutTimer);
           pendingShutTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2600);
+        } else if (ent?.includes('restart') || ent?.includes('reboot')) {
+          // Reboot: go down briefly, then back up — drives the "Restarting" overlay.
+          clearTimeout(pendingShutTimer);
+          clearTimeout(pendingBootTimer);
+          pendingShutTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 1500);
+          pendingBootTimer = setTimeout(() => setState('binary_sensor.pc_status', 'on'), 5000);
         } else if (ent?.includes('sleep')) {
           clearTimeout(pendingSleepTimer);
           pendingSleepTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2000);
@@ -448,7 +460,7 @@
   // updateYaml, control handlers) reads through `state` so values
   // can't drift apart at runtime.
   const DEFAULTS = Object.freeze({
-    visibility: { turn_on: true, sleep: true, shutdown: true },
+    visibility: { turn_on: true, sleep: true, restart: false, shutdown: true },
     metricVis: {
       cpu_usage: true,
       cpu_temp:  false,
@@ -507,11 +519,14 @@
         status_entity: 'binary_sensor.pc_status',
         turn_on:  'switch.my_pc',
         sleep:    'button.my_pc_sleep',
+        restart:  'button.my_pc_restart',
         shutdown: 'button.my_pc_shutdown',
         confirm_shutdown: true,
         confirm_sleep: false,
+        confirm_restart: false,
         show_turn_on:   state.visibility.turn_on,
         show_sleep:     state.visibility.sleep,
+        show_restart:   state.visibility.restart,
         show_shutdown:  state.visibility.shutdown,
         show_cpu_usage: state.metricVis.cpu_usage,
         show_cpu_temp:  state.metricVis.cpu_temp,
@@ -521,6 +536,10 @@
         show_storage:   state.metricVis.storage,
         accent_color:   state.accent || null,
         metrics,
+        drives: [
+          { status: 'sensor.my_pc_drive1_status', temp: 'sensor.my_pc_drive1_temp', name: 'Drive 1' },
+          { status: 'sensor.my_pc_drive2_status', temp: 'sensor.my_pc_drive2_temp', name: 'Drive 2' },
+        ],
       };
       tile.setConfig({ ...base, variant: 'tile',    name: 'My PC' });
       chip.setConfig({ ...base, variant: 'chip',    name: 'My PC' });
@@ -586,11 +605,14 @@
       'status_entity: binary_sensor.YOUR_PC_PING   # `on` when reachable',
       'turn_on:  switch.YOUR_PC_WOL                # Wake-on-LAN switch / wake script',
       'sleep:    button.YOUR_PC_SLEEP',
+      'restart:  button.YOUR_NAS_REBOOT          # Synology DSM reboot button',
       'shutdown: button.YOUR_PC_SHUTDOWN',
       'confirm_shutdown: true',
       'confirm_sleep: false',
+      'confirm_restart: true',
       `show_turn_on:   ${visibility.turn_on}`,
       `show_sleep:     ${visibility.sleep}`,
+      `show_restart:   ${visibility.restart}`,
       `show_shutdown:  ${visibility.shutdown}`,
       `show_cpu_usage: ${metricVis.cpu_usage}`,
       `show_cpu_temp:  ${metricVis.cpu_temp}`,
@@ -606,6 +628,13 @@
       '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
       ...ramLines,
       ...storageLines,
+      'drives:                                   # per-physical-disk health + temp',
+      '  - status: sensor.YOUR_NAS_DRIVE_1_STATUS',
+      '    temp:   sensor.YOUR_NAS_DRIVE_1_TEMP',
+      '    name: Drive 1',
+      '  - status: sensor.YOUR_NAS_DRIVE_2_STATUS',
+      '    temp:   sensor.YOUR_NAS_DRIVE_2_TEMP',
+      '    name: Drive 2',
     ].join('\n');
 
     document.getElementById('yaml-snippet').textContent = yaml;
@@ -644,6 +673,8 @@
     drift('sensor.my_pc_storage_used',        320, 380);
     drift('sensor.my_pc_storage2_percent',    20, 30);
     drift('sensor.my_pc_storage2_used',       1.0, 1.5);
+    drift('sensor.my_pc_drive1_temp',         32, 46);
+    drift('sensor.my_pc_drive2_temp',         34, 48);
   }, 1500);
 
   // ── Demo controls ──────────────────────────────────────────────
