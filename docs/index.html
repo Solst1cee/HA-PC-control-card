@@ -606,6 +606,15 @@
       '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
       ...ramLines,
       ...storageLines,
+      '  # HASS.Agent disk? Its state is the drive label and the sizes live in',
+      '  # attributes, so read them directly — no helper sensors needed:',
+      '  #   - entity: sensor.YOUR_PC_storage_c',
+      '  #     attribute: UsedSpaceMB        # value comes from this attribute',
+      '  #     total_attribute: TotalSizeMB  # total from an attribute on the same entity',
+      '  #     unit: MB                       # the unit the values are ALREADY in (not the',
+      '  #                                    # display unit) — card auto-scales to GB/TB',
+      '  #     name: "C:"',
+      '  # (Omit attribute/total_attribute for a simple % — state auto-detects UsedSpacePercentage.)',
     ].join('\n');
 
     document.getElementById('yaml-snippet').textContent = yaml;
