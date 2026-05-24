@@ -58,3 +58,68 @@ test('PC config (no drives) renders no drive rows and no summary', () => {
   assert.equal(card.shadowRoot.querySelectorAll('.drive').length, 0);
   card.disconnectedCallback();
 });
+
+test('feature drive without a temp sensor shows capitalized status text', () => {
+  const card = document.createElement('pc-control-card');
+  card.setConfig({
+    variant: 'feature',
+    status_entity: 'binary_sensor.nas',
+    drives: [{ status: 'sensor.d1_status', name: 'Drive 1' }],   // no temp entity
+  });
+  card.hass = driveStates();
+  const d1 = card.shadowRoot.querySelector('.drive[data-key="drive_0"]');
+  assert.equal(d1.querySelector('.dval').textContent, 'Normal');
+  card.disconnectedCallback();
+});
+
+test('show_drives:false hides feature rows and the chip summary', () => {
+  const feat = document.createElement('pc-control-card');
+  feat.setConfig({
+    variant: 'feature', status_entity: 'binary_sensor.nas', show_drives: false,
+    drives: [{ status: 'sensor.d1_status', name: 'Drive 1' }],
+  });
+  feat.hass = driveStates();
+  assert.equal(feat.shadowRoot.querySelector('.drive[data-key="drive_0"]').style.display, 'none');
+  feat.disconnectedCallback();
+
+  const chip = document.createElement('pc-control-card');
+  chip.setConfig({
+    variant: 'chip', status_entity: 'binary_sensor.nas', show_drives: false,
+    drives: [{ status: 'sensor.d1_status', name: 'Drive 1' }],
+  });
+  chip.hass = driveStates();
+  assert.equal(chip.shadowRoot.querySelector('.mini-stat[data-key="drives_summary"]').style.display, 'none');
+  chip.disconnectedCallback();
+});
+
+test('drive rows blank out when the device is off', () => {
+  const card = document.createElement('pc-control-card');
+  card.setConfig({
+    variant: 'feature', status_entity: 'binary_sensor.nas',
+    drives: [{ status: 'sensor.d1_status', temp: 'sensor.d1_temp', name: 'Drive 1' }],
+  });
+  const off = driveStates();
+  off.states['binary_sensor.nas'] = { state: 'off', last_changed: new Date().toISOString(), attributes: {} };
+  card.hass = off;
+  const row = card.shadowRoot.querySelector('.drive[data-key="drive_0"]');
+  assert.equal(row.querySelector('.dval').textContent, '—');
+  const dot = row.querySelector('.ddot');
+  assert.ok(!dot.classList.contains('ok') && !dot.classList.contains('bad'));
+  card.disconnectedCallback();
+});
+
+test('chip summary shows healthy/total without red when all drives healthy', () => {
+  const card = document.createElement('pc-control-card');
+  card.setConfig({
+    variant: 'chip', status_entity: 'binary_sensor.nas',
+    drives: [
+      { status: 'sensor.d1_status', name: 'Drive 1' },
+      { status: 'sensor.d1_status', name: 'Drive 2' },   // both 'normal'
+    ],
+  });
+  card.hass = driveStates();
+  const cell = card.shadowRoot.querySelector('.mini-stat[data-key="drives_summary"] .mval');
+  assert.equal(cell.textContent, '2/2');
+  assert.ok(!cell.classList.contains('bad'));
+  card.disconnectedCallback();
+});

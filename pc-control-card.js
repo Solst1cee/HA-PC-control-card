@@ -1151,7 +1151,7 @@ const TEMPLATES = {
           </div>
           `).join('')}
           ${drives.length ? `
-          <div class="mini-stat drives-summary" data-key="drives_summary">
+          <div class="mini-stat" data-key="drives_summary">
             <div class="mlabel">DRIVES</div>
             <div class="mval">—</div>
           </div>
