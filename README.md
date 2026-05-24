@@ -251,11 +251,12 @@ Accepts any CSS color string (hex, `rgb()`, `oklch()`, color names). Omit it and
 ## Behaviour
 
 - **Visual editor** — when you add or edit the card from the dashboard UI (not raw YAML), you get a form with entity pickers for each action, a color picker for `accent_color`, toggles for the booleans, and a dropdown for `variant`. Drop into Manual mode if you prefer YAML.
-- **State** is derived from `status_entity`. While an action is pending, the card overlays a transitional state (Booting / Shutting down / Sleeping) with a pulsing indicator and a spinner on the busy button.
+- **State** is derived from `status_entity`. While an action is pending, the card overlays a transitional state (Booting / Shutting down / Sleeping / Restarting) with a pulsing indicator and a spinner on the busy button.
 - **Booting / Shutting**: cleared automatically when `status_entity` flips to the expected value (or after 90 s as a safety fallback).
+- **Restarting**: shown after pressing Restart; cleared once `status_entity` dips (off/unavailable) and returns to `on`, or after a 5-minute safety fallback (NAS reboots are slow).
 - **Sleeping**: displayed for 6 s after pressing Sleep — your `binary_sensor` likely can't distinguish sleeping from off, so this is a short visual confirmation rather than a sustained state.
 - **Confirmation**: when armed, the destructive button changes label ("Shut down" → "Confirm?"). Both labels share a CSS grid cell so the button width never shifts.
-- **Uptime** in the feature variant is computed from `last_changed` of your status sensor.
+- **Uptime** in the feature variant is computed from `last_changed` of your status sensor — or from a dedicated `uptime_entity` (a boot-time timestamp or numeric-duration sensor) when you set one.
 
 ---
 
