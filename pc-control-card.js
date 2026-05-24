@@ -20,7 +20,7 @@
  *        --error-color. Light & dark themes Just Work.
  */
 
-const CARD_VERSION = '1.0.1';
+const CARD_VERSION = '1.1.0';
 
 // ── State machine ───────────────────────────────────────────────────
 //   off / on are derived from the binary_sensor.

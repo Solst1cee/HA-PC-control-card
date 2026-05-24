@@ -20,7 +20,7 @@
  *        --error-color. Light & dark themes Just Work.
  */
 
-const CARD_VERSION = '1.0.1';
+const CARD_VERSION = '1.1.0';
 
 // ── State machine ───────────────────────────────────────────────────
 //   off / on are derived from the binary_sensor.
@@ -28,6 +28,7 @@ const CARD_VERSION = '1.0.1';
 //   resolve when the sensor flips, or expire after a timeout.
 
 const PENDING_TIMEOUT_MS = 90_000;
+const RESTART_TIMEOUT_MS = 300_000; // NAS reboots are slower than a PC boot
 const SLEEP_DISPLAY_MS   = 6_000;
 const ARM_TIMEOUT_MS     = 2_400;
 
@@ -36,7 +37,8 @@ const META = {
   on:       { label: 'On',            tone: 'live',  pulse: false },
   sleeping: { label: 'Sleeping',      tone: 'warm',  pulse: false },
   booting:  { label: 'Booting',       tone: 'warm',  pulse: true  },
-  shutting: { label: 'Shutting down', tone: 'alert', pulse: true  },
+  shutting:   { label: 'Shutting down', tone: 'alert', pulse: true  },
+  restarting: { label: 'Restarting',    tone: 'warm',  pulse: true  },
   waking:   { label: 'Waking',        tone: 'warm',  pulse: true  },
 };
 
@@ -87,7 +89,7 @@ function migrateConfig(raw) {
 // full { entity, service: 'domain.action' } object.
 // Returns { entity, domain, service } where `service` is the action
 // name ("turn_on", "press", …) ready for callService(domain, service).
-function parseAction(raw) {
+export function parseAction(raw) {
   if (!raw) return null;
   if (typeof raw === 'string') {
     const [domain] = raw.split('.');
@@ -120,6 +122,28 @@ function fmtUptime(ms) {
   return `${m}m`;
 }
 
+// Compute uptime in milliseconds from an uptime/last-boot entity, or null.
+// Handles a timestamp sensor (device_class 'timestamp' or any ISO-parseable
+// state) and a numeric duration sensor (unit-aware: d/h/min, default seconds).
+// `Number(raw)` — not parseFloat — is used so date strings like "2024-01-01"
+// (which parseFloat would read as 2024) fall through to date parsing.
+export function uptimeMsFromEntity(ent, now = Date.now()) {
+  if (!ent || ent.state == null) return null;
+  const raw = String(ent.state);
+  const num = Number(raw);
+  if (ent.attributes?.device_class === 'timestamp' || !Number.isFinite(num)) {
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? now - t : null;
+  }
+  const unit = (ent.attributes?.unit_of_measurement || '').toLowerCase();
+  const mult =
+    /^(d|day|days)$/.test(unit)            ? 86_400_000 :
+    /^(h|hr|hrs|hour|hours)$/.test(unit)   ? 3_600_000  :
+    /^(min|m|minute|minutes)$/.test(unit)  ? 60_000     :
+    1000;
+  return num * mult;
+}
+
 // Format a number for the value label. Single decimal under 10, no
 // decimals at 10+, three significant figures otherwise.
 function fmtNum(n) {
@@ -127,6 +151,18 @@ function fmtNum(n) {
   if (Math.abs(n) >= 100) return n.toFixed(0);
   if (Math.abs(n) >= 10)  return n.toFixed(1);
   return n.toFixed(2);
+}
+
+// Default set of drive/volume status states treated as healthy. Synology
+// reports "normal" for healthy disks and volumes. Overridable per card via
+// the `healthy_states` config key.
+export const DEFAULT_HEALTHY = ['normal', 'ok', 'healthy', 'good'];
+
+// True when a status state string is considered healthy. `healthyStates`
+// must already be lowercased by the caller.
+export function driveHealthy(state, healthyStates) {
+  if (state == null) return false;
+  return healthyStates.includes(String(state).trim().toLowerCase());
 }
 
 // ── Styles ──────────────────────────────────────────────────────────
@@ -137,6 +173,7 @@ const STYLES = `
   --spc-accent: var(--primary-color, oklch(0.58 0.13 250));
   --spc-warn:   var(--warning-color, #f5a623);
   --spc-alert:  var(--error-color, #db4437);
+  --spc-ok:     var(--success-color, #2f9e6e);
   --spc-bg:     var(--ha-card-background, var(--card-background-color, #fff));
   --spc-fg:     var(--primary-text-color, #1a1a1a);
   --spc-fg-2:   var(--secondary-text-color, #6b7280);
@@ -408,6 +445,22 @@ const STYLES = `
   transition: opacity 220ms, padding 220ms;
 }
 .feature.no-actions .metrics { padding-bottom: 22px; }
+
+/* ── Drive health (NAS) ───────────────────────────────────────── */
+.feature .drive { display: flex; align-items: center; gap: 8px; }
+.feature .drive .ddot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--spc-fg-2); flex-shrink: 0;
+}
+.feature .drive .ddot.ok  { background: var(--spc-ok); }
+.feature .drive .ddot.bad { background: var(--spc-alert); }
+.feature .drive .dname { font-size: 12px; color: var(--spc-fg); flex: 1; min-width: 0; }
+.feature .drive .dval {
+  font-size: 12px; color: var(--spc-fg-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.chip .mini-stat .mval.bad { color: var(--spc-alert); }
 `;
 
 // ── Icons (inline SVG strings) ──────────────────────────────────────
@@ -415,7 +468,9 @@ const STYLES = `
 const ICONS = {
   power: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M12 4v8"/><path d="M5.6 7.6a8 8 0 1 0 12.8 0"/></svg>',
   moon:  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
+  restart: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>',
   pc:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>',
+  nas:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01"/><path d="M8 17.5h.01"/></svg>',
   spinner: '<svg class="spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.18"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
 };
 
@@ -425,9 +480,10 @@ class PcControlCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._pending = null;     // 'on' | 'sleep' | 'shutdown'
+    this._pending = null;     // 'on' | 'sleep' | 'restart' | 'shutdown'
     this._pendingSince = 0;
-    this._armed = { sleep: false, shutdown: false };
+    this._armed = { sleep: false, shutdown: false, restart: false };
+    this._restartDipped = false;
     this._armTimers = {};
     this._sleepTimer = null;
     this._tickTimer = null;
@@ -443,13 +499,17 @@ class PcControlCard extends HTMLElement {
       variant: 'tile',
       name: 'My PC',
       status_entity: 'binary_sensor.pc_status',
+      uptime_entity: null,
       turn_on: null,
       sleep: null,
+      restart: null,
       shutdown: null,
       confirm_shutdown: true,
       confirm_sleep: false,
+      confirm_restart: true,
       show_turn_on: true,
       show_sleep: true,
+      show_restart: false,
       show_shutdown: true,
       show_cpu_usage: true,
       show_cpu_temp:  false,
@@ -457,14 +517,22 @@ class PcControlCard extends HTMLElement {
       show_gpu_temp:  false,
       show_ram_usage: true,
       show_storage:   true,
+      show_drives:    true,
       accent_color: null,
+      healthy_states: null,
+      icon: 'pc',
       metrics: {},
       ...migrated,
     };
     this._storages = this._normalizeStorages();
+    this._drives = this._normalizeDrives();
+    this._healthyStates = (Array.isArray(this._config.healthy_states) && this._config.healthy_states.length
+      ? this._config.healthy_states
+      : DEFAULT_HEALTHY).map((s) => String(s).toLowerCase());
     this._actions = {
       turn_on:  parseAction(this._config.turn_on),
       sleep:    parseAction(this._config.sleep),
+      restart:  parseAction(this._config.restart),
       shutdown: parseAction(this._config.shutdown),
     };
     this._build();
@@ -479,7 +547,14 @@ class PcControlCard extends HTMLElement {
       const elapsed = Date.now() - this._pendingSince;
       if (this._pending === 'on'       && s === 'on'  ) this._clearPending();
       if (this._pending === 'shutdown' && s === 'off' ) this._clearPending();
-      if (elapsed > PENDING_TIMEOUT_MS) this._clearPending();
+      if (this._pending === 'restart') {
+        // Reboot takes the box down (off/unavailable) then back to on.
+        if (s !== 'on') this._restartDipped = true;
+        if (this._restartDipped && s === 'on') this._clearPending();
+        if (elapsed > RESTART_TIMEOUT_MS) this._clearPending();
+      } else if (elapsed > PENDING_TIMEOUT_MS) {
+        this._clearPending();
+      }
     }
     this._update();
   }
@@ -534,6 +609,7 @@ class PcControlCard extends HTMLElement {
     const s = this._hass?.states[this._config.status_entity]?.state;
     if (this._pending === 'on')       return 'booting';
     if (this._pending === 'shutdown') return 'shutting';
+    if (this._pending === 'restart')  return 'restarting';
     if (this._pending === 'sleep')    return 'sleeping';
     if (s === 'on')  return 'on';
     return 'off';
@@ -542,6 +618,11 @@ class PcControlCard extends HTMLElement {
   _uptime() {
     const ent = this._hass?.states[this._config.status_entity];
     if (!ent || ent.state !== 'on') return null;
+    // Prefer an explicit uptime / last-boot sensor when configured.
+    if (this._config.uptime_entity) {
+      const ms = uptimeMsFromEntity(this._hass?.states[this._config.uptime_entity], Date.now());
+      if (ms != null && ms >= 0) return fmtUptime(ms);
+    }
     const changed = new Date(ent.last_changed).getTime();
     if (!Number.isFinite(changed)) return null;
     return fmtUptime(Date.now() - changed);
@@ -570,6 +651,37 @@ class PcControlCard extends HTMLElement {
       }];
     }
     return [];
+  }
+
+  // Normalize the optional top-level `drives` array into clean
+  // { status, temp, name } records — one per physical disk. Mirrors
+  // _normalizeStorages; entries without a `status` sensor are dropped.
+  _normalizeDrives() {
+    const d = this._config.drives;
+    if (!Array.isArray(d)) return [];
+    return d
+      .filter((x) => x && x.status)
+      .map((x, i) => ({
+        status: x.status,
+        temp: x.temp || null,
+        name: x.name || (i === 0 ? 'Drive' : `Drive ${i + 1}`),
+      }));
+  }
+
+  // Display string for a drive row: temperature ("38 °C") when a temp
+  // sensor is configured and numeric, otherwise the capitalized status.
+  _driveValue(d) {
+    if (d.temp) {
+      const te = this._hass?.states[d.temp];
+      const n = parseFloat(te?.state);
+      if (Number.isFinite(n)) {
+        const unit = te.attributes?.unit_of_measurement || '°C';
+        return `${Math.round(n)} ${unit}`;
+      }
+    }
+    const st = this._hass?.states[d.status]?.state;
+    if (st) return st.charAt(0).toUpperCase() + st.slice(1);
+    return '—';
   }
 
   // Read a metric sensor and return both a display string and a 0–100
@@ -679,6 +791,18 @@ class PcControlCard extends HTMLElement {
     this._setPending('shutdown');
     this._callAction('shutdown');
   }
+  _onRestart() {
+    if (this._derivedStatus() !== 'on' || this._pending) return;
+    if (!this._actions.restart) return;
+    if (this._config.confirm_restart && !this._armed.restart) {
+      this._arm('restart');
+      return;
+    }
+    this._disarm('restart');
+    this._restartDipped = false;
+    this._setPending('restart');
+    this._callAction('restart');
+  }
 
   _arm(name) {
     this._armed[name] = true;
@@ -697,7 +821,7 @@ class PcControlCard extends HTMLElement {
   // ── Build / update ───────────────────────────────────────────
   _build() {
     const variant = this._variant();
-    const html = TEMPLATES[variant](this._storages || []);
+    const html = TEMPLATES[variant](this._storages || [], this._drives || [], ICONS[this._config.icon] || ICONS.pc);
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${html}`;
 
     // Apply per-card accent color override (config: `accent_color`).
@@ -726,6 +850,7 @@ class PcControlCard extends HTMLElement {
     }
     $('.btn-on').addEventListener('click', () => this._onTurnOn());
     $('.btn-sleep').addEventListener('click', () => this._onSleep());
+    $('.btn-restart').addEventListener('click', () => this._onRestart());
     $('.btn-shutdown').addEventListener('click', () => this._onShutdown());
 
     // Tick uptime + animations.
@@ -754,10 +879,13 @@ class PcControlCard extends HTMLElement {
     // the entire actions row + adjust the previous section's bottom
     // padding so the card has equal side/bottom gaps when buttons are
     // hidden (behaves like a pure status monitor).
-    const anyBtn =
-      this._config.show_turn_on  !== false ||
-      this._config.show_sleep    !== false ||
-      this._config.show_shutdown !== false;
+    const vis = {
+      on:       this._config.show_turn_on  !== false,
+      sleep:    this._config.show_sleep    !== false,
+      restart:  !!this._config.show_restart,
+      shutdown: this._config.show_shutdown !== false,
+    };
+    const anyBtn = vis.on || vis.sleep || vis.restart || vis.shutdown;
     root.classList.toggle('no-actions', !anyBtn);
 
     // Name + status text
@@ -827,6 +955,26 @@ class PcControlCard extends HTMLElement {
           fillEl.style.width = '0%';
         }
       });
+
+      // Per-drive health rows (status dot + temperature).
+      (this._drives || []).forEach((d, i) => {
+        const row = root.querySelector(`.drive[data-key="drive_${i}"]`);
+        if (!row) return;
+        const enabled = this._config.show_drives !== false;
+        row.style.display = enabled ? '' : 'none';
+        if (!enabled) return;
+        const dot = row.querySelector('.ddot');
+        const valEl = row.querySelector('.dval');
+        if (isOn) {
+          const healthy = driveHealthy(this._hass?.states[d.status]?.state, this._healthyStates);
+          dot.classList.toggle('ok', healthy);
+          dot.classList.toggle('bad', !healthy);
+          valEl.textContent = this._driveValue(d);
+        } else {
+          dot.classList.remove('ok', 'bad');
+          valEl.textContent = '—';
+        }
+      });
     }
 
     // Chip-only: inline uptime + mini stats (cpu/ram/gpu + temps + first disk)
@@ -865,21 +1013,47 @@ class PcControlCard extends HTMLElement {
         // narrower mini-stat column.
         cell.textContent = m ? m.compactValue : '—';
       });
+
+      // Drives summary mini-stat (healthy/total), red if any unhealthy.
+      if ((this._drives || []).length) {
+        const stat = mini.querySelector('.mini-stat[data-key="drives_summary"]');
+        if (stat) {
+          const enabled = this._config.show_drives !== false;
+          stat.style.display = enabled ? '' : 'none';
+          if (enabled) {
+            anyMini = true;
+            const cell = stat.querySelector('.mval');
+            if (isOn) {
+              const total = this._drives.length;
+              const healthy = this._drives.filter(
+                (d) => driveHealthy(this._hass?.states[d.status]?.state, this._healthyStates),
+              ).length;
+              cell.textContent = `${healthy}/${total}`;
+              cell.classList.toggle('bad', healthy < total);
+            } else {
+              cell.textContent = '—';
+              cell.classList.remove('bad');
+            }
+          }
+        }
+      }
       mini.style.display = (isOn && anyMini) ? '' : 'none';
     }
 
     // Button states
     const onBtn = root.querySelector('.btn-on');
     const sleepBtn = root.querySelector('.btn-sleep');
+    const restartBtn = root.querySelector('.btn-restart');
     const shutBtn = root.querySelector('.btn-shutdown');
 
     // Show/hide each action button per config. Remaining buttons fill
     // the row via flex: 1. The actions row + chip divider are hidden
     // by the .no-actions class on .card (set above), so no inline
     // style override is needed for them — only the individual buttons.
-    onBtn.style.display    = this._config.show_turn_on  === false ? 'none' : '';
-    sleepBtn.style.display = this._config.show_sleep    === false ? 'none' : '';
-    shutBtn.style.display  = this._config.show_shutdown === false ? 'none' : '';
+    onBtn.style.display      = vis.on       ? '' : 'none';
+    sleepBtn.style.display   = vis.sleep    ? '' : 'none';
+    restartBtn.style.display = vis.restart  ? '' : 'none';
+    shutBtn.style.display    = vis.shutdown ? '' : 'none';
 
     const off  = status === 'off';
     const on   = status === 'on';
@@ -902,6 +1076,14 @@ class PcControlCard extends HTMLElement {
       label: 'Sleep',
       armedLabel: this._config.confirm_sleep ? 'Confirm?' : null,
     });
+    setBtn(restartBtn, {
+      disabled: !on || pend,
+      busy: this._pending === 'restart',
+      armed: this._armed.restart,
+      iconKey: 'restart',
+      label: 'Restart',
+      armedLabel: this._config.confirm_restart ? 'Confirm?' : null,
+    });
     setBtn(shutBtn, {
       disabled: off || pend,
       primary: false,
@@ -923,10 +1105,10 @@ class PcControlCard extends HTMLElement {
 // on each setConfig; _update() then fills in the text/classes.
 
 const TEMPLATES = {
-  tile: () => `
+  tile: (_storages, _drives, iconSvg) => `
     <ha-card class="card tile">
       <div class="head">
-        <button class="circle" title="Toggle">${ICONS.pc}</button>
+        <button class="circle" title="Toggle">${iconSvg}</button>
         <div style="min-width:0; flex:1;">
           <div class="name"></div>
           <div class="status"><span class="dot"></span><span class="label"></span><span class="anim"></span></div>
@@ -935,15 +1117,16 @@ const TEMPLATES = {
       <div class="actions">
         <button class="btn btn-on compact" title="Turn on"></button>
         <button class="btn btn-sleep compact" title="Sleep"></button>
+        <button class="btn btn-restart compact" title="Restart"></button>
         <button class="btn btn-shutdown danger compact" title="Shut down"></button>
       </div>
     </ha-card>
   `,
 
-  chip: (storages) => `
+  chip: (storages, drives, iconSvg) => `
     <ha-card class="card chip">
       <div class="head">
-        <div class="icon-box chip-icon">${ICONS.pc}<span class="ring" style="display:none"></span></div>
+        <div class="icon-box chip-icon">${iconSvg}<span class="ring" style="display:none"></span></div>
         <div class="meta">
           <div class="name"></div>
           <div class="status">
@@ -967,21 +1150,28 @@ const TEMPLATES = {
             <div class="mval">—</div>
           </div>
           `).join('')}
+          ${drives.length ? `
+          <div class="mini-stat" data-key="drives_summary">
+            <div class="mlabel">DRIVES</div>
+            <div class="mval">—</div>
+          </div>
+          ` : ''}
         </div>
       </div>
       <div class="divider"></div>
       <div class="actions">
         <button class="btn btn-on" title="Turn on"></button>
         <button class="btn btn-sleep" title="Sleep"></button>
+        <button class="btn btn-restart" title="Restart"></button>
         <button class="btn btn-shutdown danger" title="Shut down"></button>
       </div>
     </ha-card>
   `,
 
-  feature: (storages) => `
+  feature: (storages, drives, iconSvg) => `
     <ha-card class="card feature">
       <div class="head">
-        <div class="icon-box lg">${ICONS.pc}<span class="ring" style="display:none"></span></div>
+        <div class="icon-box lg">${iconSvg}<span class="ring" style="display:none"></span></div>
         <div class="meta">
           <div class="name"></div>
           <div class="status"><span class="dot"></span><span class="label"></span><span class="anim"></span></div>
@@ -995,11 +1185,13 @@ const TEMPLATES = {
       <div class="metrics">
         ${METRIC_KEYS.map((k) => metricRow(k, METRIC_LABELS[k])).join('')}
         ${storages.map((s, i) => metricRow(`storage_${i}`, escapeHtml(s.name).toUpperCase())).join('')}
+        ${drives.map((d, i) => driveRow(`drive_${i}`, escapeHtml(d.name).toUpperCase())).join('')}
       </div>
 
       <div class="actions">
         <button class="btn btn-on" title="Turn on"></button>
         <button class="btn btn-sleep" title="Sleep"></button>
+        <button class="btn btn-restart" title="Restart"></button>
         <button class="btn btn-shutdown danger" title="Shut down"></button>
       </div>
     </ha-card>
@@ -1014,6 +1206,16 @@ function metricRow(key, label) {
         <span class="mval">—</span>
       </div>
       <div class="metric-bar"><div class="fill"></div></div>
+    </div>
+  `;
+}
+
+function driveRow(key, label) {
+  return `
+    <div class="drive" data-key="${key}">
+      <span class="ddot"></span>
+      <span class="dname">${label}</span>
+      <span class="dval">—</span>
     </div>
   `;
 }
@@ -1065,6 +1267,7 @@ function setBtn(btn, opts) {
 // How many storage slots the visual editor exposes. The card itself
 // accepts any number via YAML; this only caps the visible form fields.
 const STORAGE_SLOTS = 3;
+const DRIVE_SLOTS = 4;
 
 const EDITOR_SCHEMA = [
   {
@@ -1077,21 +1280,25 @@ const EDITOR_SCHEMA = [
   },
   { name: 'name', selector: { text: {} } },
   { name: 'status_entity', selector: { entity: { domain: ['binary_sensor', 'sensor', 'switch'] } } },
+  { name: 'uptime_entity', selector: { entity: { domain: 'sensor' } } },
 
   { type: 'expandable', title: 'Actions', icon: 'mdi:gesture-tap', schema: [
     { name: 'turn_on',  selector: { entity: { domain: ['switch', 'script', 'button', 'input_button'] } } },
     { name: 'sleep',    selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
+    { name: 'restart',  selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
     { name: 'shutdown', selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
   ] },
 
   { type: 'expandable', title: 'Confirmation', icon: 'mdi:shield-check', schema: [
     { name: 'confirm_shutdown', selector: { boolean: {} } },
     { name: 'confirm_sleep',    selector: { boolean: {} } },
+    { name: 'confirm_restart',  selector: { boolean: {} } },
   ] },
 
   { type: 'expandable', title: 'Visible buttons', icon: 'mdi:eye', schema: [
     { name: 'show_turn_on',  selector: { boolean: {} } },
     { name: 'show_sleep',    selector: { boolean: {} } },
+    { name: 'show_restart',  selector: { boolean: {} } },
     { name: 'show_shutdown', selector: { boolean: {} } },
   ] },
 
@@ -1102,9 +1309,14 @@ const EDITOR_SCHEMA = [
     { name: 'show_gpu_temp',  selector: { boolean: {} } },
     { name: 'show_ram_usage', selector: { boolean: {} } },
     { name: 'show_storage',   selector: { boolean: {} } },
+    { name: 'show_drives',    selector: { boolean: {} } },
   ] },
 
   { type: 'expandable', title: 'Appearance', icon: 'mdi:palette', schema: [
+    { name: 'icon', selector: { select: { mode: 'dropdown', options: [
+      { value: 'pc',  label: 'PC (monitor)' },
+      { value: 'nas', label: 'NAS (drive bays)' },
+    ] } } },
     { name: 'accent_color', selector: { color_rgb: {} } },
   ] },
 
@@ -1130,19 +1342,41 @@ const EDITOR_SCHEMA = [
     { name: '_storage_3_total',  selector: { entity: { domain: 'sensor' } } },
     { name: '_storage_3_name',   selector: { text: {} } },
   ] },
+
+  { type: 'expandable', title: 'Drives (NAS health)', icon: 'mdi:harddisk-plus', schema: [
+    { name: '_drive_1_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_1_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_1_name',   selector: { text: {} } },
+
+    { name: '_drive_2_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_2_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_2_name',   selector: { text: {} } },
+
+    { name: '_drive_3_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_3_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_3_name',   selector: { text: {} } },
+
+    { name: '_drive_4_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_4_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_4_name',   selector: { text: {} } },
+  ] },
 ];
 
 const EDITOR_LABELS = {
   variant: 'Variant',
   name: 'Name',
   status_entity: 'Status sensor (on = device is reachable)',
+  uptime_entity: 'Uptime / last-boot sensor (optional, more accurate)',
   turn_on: 'Turn on action',
   sleep: 'Sleep action',
+  restart: 'Restart action (e.g. NAS reboot button)',
   shutdown: 'Shutdown action',
   confirm_shutdown: 'Require confirm for Shutdown',
   confirm_sleep: 'Require confirm for Sleep',
+  confirm_restart: 'Require confirm for Restart',
   show_turn_on: 'Show Turn on button',
   show_sleep: 'Show Sleep button',
+  show_restart: 'Show Restart button',
   show_shutdown: 'Show Shut down button',
   show_cpu_usage: 'Show CPU usage',
   show_cpu_temp:  'Show CPU temp',
@@ -1150,7 +1384,9 @@ const EDITOR_LABELS = {
   show_gpu_temp:  'Show GPU temp',
   show_ram_usage: 'Show RAM',
   show_storage:   'Show Storage',
+  show_drives:    'Show Drive health',
   accent_color: 'Accent color (overrides theme)',
+  icon: 'Header icon',
   _metric_cpu_usage:       'CPU usage sensor (percent)',
   _metric_cpu_temp:        'CPU temperature sensor (°C)',
   _metric_gpu_usage:       'GPU usage sensor (percent or load)',
@@ -1166,6 +1402,10 @@ const EDITOR_LABELS = {
   _storage_3_entity: 'Disk 3 · used / percent sensor',
   _storage_3_total:  'Disk 3 · total sensor',
   _storage_3_name:   'Disk 3 · label',
+  _drive_1_status: 'Drive 1 · status sensor', _drive_1_temp: 'Drive 1 · temperature sensor', _drive_1_name: 'Drive 1 · label',
+  _drive_2_status: 'Drive 2 · status sensor', _drive_2_temp: 'Drive 2 · temperature sensor', _drive_2_name: 'Drive 2 · label',
+  _drive_3_status: 'Drive 3 · status sensor', _drive_3_temp: 'Drive 3 · temperature sensor', _drive_3_name: 'Drive 3 · label',
+  _drive_4_status: 'Drive 4 · status sensor', _drive_4_temp: 'Drive 4 · temperature sensor', _drive_4_name: 'Drive 4 · label',
 };
 
 class PcControlCardEditor extends HTMLElement {
@@ -1202,6 +1442,14 @@ class PcControlCardEditor extends HTMLElement {
       flat[`_storage_${i + 1}_total`]  = s.total;
       flat[`_storage_${i + 1}_name`]   = s.name;
     }
+
+    const drives = Array.isArray(migrated.drives) ? migrated.drives : [];
+    for (let i = 0; i < DRIVE_SLOTS; i++) {
+      const d = drives[i] || {};
+      flat[`_drive_${i + 1}_status`] = d.status;
+      flat[`_drive_${i + 1}_temp`]   = d.temp;
+      flat[`_drive_${i + 1}_name`]   = d.name;
+    }
     return flat;
   }
 
@@ -1233,6 +1481,22 @@ class PcControlCardEditor extends HTMLElement {
     if (storages.length) metrics.storages = storages;
     if (Object.keys(metrics).length) next.metrics = metrics;
     else delete next.metrics;
+
+    const drives = [];
+    for (let i = 1; i <= DRIVE_SLOTS; i++) {
+      const status = next[`_drive_${i}_status`];
+      if (status) {
+        const item = { status };
+        if (next[`_drive_${i}_temp`]) item.temp = next[`_drive_${i}_temp`];
+        if (next[`_drive_${i}_name`]) item.name = next[`_drive_${i}_name`];
+        drives.push(item);
+      }
+      delete next[`_drive_${i}_status`];
+      delete next[`_drive_${i}_temp`];
+      delete next[`_drive_${i}_name`];
+    }
+    if (drives.length) next.drives = drives;
+    else delete next.drives;
     return next;
   }
 
