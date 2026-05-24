@@ -477,6 +477,7 @@ class PcControlCard extends HTMLElement {
       variant: 'tile',
       name: 'My PC',
       status_entity: 'binary_sensor.pc_status',
+      uptime_entity: null,
       turn_on: null,
       sleep: null,
       shutdown: null,
@@ -576,6 +577,11 @@ class PcControlCard extends HTMLElement {
   _uptime() {
     const ent = this._hass?.states[this._config.status_entity];
     if (!ent || ent.state !== 'on') return null;
+    // Prefer an explicit uptime / last-boot sensor when configured.
+    if (this._config.uptime_entity) {
+      const ms = uptimeMsFromEntity(this._hass?.states[this._config.uptime_entity], Date.now());
+      if (ms != null && ms >= 0) return fmtUptime(ms);
+    }
     const changed = new Date(ent.last_changed).getTime();
     if (!Number.isFinite(changed)) return null;
     return fmtUptime(Date.now() - changed);
