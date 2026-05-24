@@ -1,6 +1,6 @@
 # PC Control Card
 
-A Home Assistant Lovelace custom card for controlling a PC — **turn on, sleep, shutdown** — with live CPU / RAM / GPU metrics.
+A Home Assistant Lovelace custom card for controlling a PC or NAS — **turn on, sleep, shutdown** — with live CPU / RAM / GPU / storage metrics.
 
 ![PC Control Card preview](screenshots/preview.png)
 
@@ -10,7 +10,7 @@ Three variants in one file:
 
 - **`tile`** — compact, fits in a small dashboard slot. Tap the icon to toggle, or use the 3 action buttons below.
 - **`chip`** — Mushroom-style: icon chip + inline status + uptime, with mini CPU/GPU stats when the PC is on.
-- **`feature`** — full card with CPU / RAM / GPU progress bars, uptime, and a clean action footer.
+- **`feature`** — full card with CPU / RAM / GPU / storage progress bars, uptime, and a clean action footer.
 
 All three variants follow your active Home Assistant theme (light & dark) via standard CSS variables. No build step. No external dependencies. Single JS file.
 
