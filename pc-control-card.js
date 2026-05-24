@@ -1267,6 +1267,7 @@ function setBtn(btn, opts) {
 // How many storage slots the visual editor exposes. The card itself
 // accepts any number via YAML; this only caps the visible form fields.
 const STORAGE_SLOTS = 3;
+const DRIVE_SLOTS = 4;
 
 const EDITOR_SCHEMA = [
   {
@@ -1279,21 +1280,25 @@ const EDITOR_SCHEMA = [
   },
   { name: 'name', selector: { text: {} } },
   { name: 'status_entity', selector: { entity: { domain: ['binary_sensor', 'sensor', 'switch'] } } },
+  { name: 'uptime_entity', selector: { entity: { domain: 'sensor' } } },
 
   { type: 'expandable', title: 'Actions', icon: 'mdi:gesture-tap', schema: [
     { name: 'turn_on',  selector: { entity: { domain: ['switch', 'script', 'button', 'input_button'] } } },
     { name: 'sleep',    selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
+    { name: 'restart',  selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
     { name: 'shutdown', selector: { entity: { domain: ['button', 'script', 'input_button'] } } },
   ] },
 
   { type: 'expandable', title: 'Confirmation', icon: 'mdi:shield-check', schema: [
     { name: 'confirm_shutdown', selector: { boolean: {} } },
     { name: 'confirm_sleep',    selector: { boolean: {} } },
+    { name: 'confirm_restart',  selector: { boolean: {} } },
   ] },
 
   { type: 'expandable', title: 'Visible buttons', icon: 'mdi:eye', schema: [
     { name: 'show_turn_on',  selector: { boolean: {} } },
     { name: 'show_sleep',    selector: { boolean: {} } },
+    { name: 'show_restart',  selector: { boolean: {} } },
     { name: 'show_shutdown', selector: { boolean: {} } },
   ] },
 
@@ -1304,9 +1309,14 @@ const EDITOR_SCHEMA = [
     { name: 'show_gpu_temp',  selector: { boolean: {} } },
     { name: 'show_ram_usage', selector: { boolean: {} } },
     { name: 'show_storage',   selector: { boolean: {} } },
+    { name: 'show_drives',    selector: { boolean: {} } },
   ] },
 
   { type: 'expandable', title: 'Appearance', icon: 'mdi:palette', schema: [
+    { name: 'icon', selector: { select: { mode: 'dropdown', options: [
+      { value: 'pc',  label: 'PC (monitor)' },
+      { value: 'nas', label: 'NAS (drive bays)' },
+    ] } } },
     { name: 'accent_color', selector: { color_rgb: {} } },
   ] },
 
@@ -1332,19 +1342,41 @@ const EDITOR_SCHEMA = [
     { name: '_storage_3_total',  selector: { entity: { domain: 'sensor' } } },
     { name: '_storage_3_name',   selector: { text: {} } },
   ] },
+
+  { type: 'expandable', title: 'Drives (NAS health)', icon: 'mdi:harddisk-plus', schema: [
+    { name: '_drive_1_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_1_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_1_name',   selector: { text: {} } },
+
+    { name: '_drive_2_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_2_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_2_name',   selector: { text: {} } },
+
+    { name: '_drive_3_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_3_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_3_name',   selector: { text: {} } },
+
+    { name: '_drive_4_status', selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_4_temp',   selector: { entity: { domain: 'sensor' } } },
+    { name: '_drive_4_name',   selector: { text: {} } },
+  ] },
 ];
 
 const EDITOR_LABELS = {
   variant: 'Variant',
   name: 'Name',
   status_entity: 'Status sensor (on = device is reachable)',
+  uptime_entity: 'Uptime / last-boot sensor (optional, more accurate)',
   turn_on: 'Turn on action',
   sleep: 'Sleep action',
+  restart: 'Restart action (e.g. NAS reboot button)',
   shutdown: 'Shutdown action',
   confirm_shutdown: 'Require confirm for Shutdown',
   confirm_sleep: 'Require confirm for Sleep',
+  confirm_restart: 'Require confirm for Restart',
   show_turn_on: 'Show Turn on button',
   show_sleep: 'Show Sleep button',
+  show_restart: 'Show Restart button',
   show_shutdown: 'Show Shut down button',
   show_cpu_usage: 'Show CPU usage',
   show_cpu_temp:  'Show CPU temp',
@@ -1352,7 +1384,9 @@ const EDITOR_LABELS = {
   show_gpu_temp:  'Show GPU temp',
   show_ram_usage: 'Show RAM',
   show_storage:   'Show Storage',
+  show_drives:    'Show Drive health',
   accent_color: 'Accent color (overrides theme)',
+  icon: 'Header icon',
   _metric_cpu_usage:       'CPU usage sensor (percent)',
   _metric_cpu_temp:        'CPU temperature sensor (°C)',
   _metric_gpu_usage:       'GPU usage sensor (percent or load)',
@@ -1368,6 +1402,10 @@ const EDITOR_LABELS = {
   _storage_3_entity: 'Disk 3 · used / percent sensor',
   _storage_3_total:  'Disk 3 · total sensor',
   _storage_3_name:   'Disk 3 · label',
+  _drive_1_status: 'Drive 1 · status sensor', _drive_1_temp: 'Drive 1 · temperature sensor', _drive_1_name: 'Drive 1 · label',
+  _drive_2_status: 'Drive 2 · status sensor', _drive_2_temp: 'Drive 2 · temperature sensor', _drive_2_name: 'Drive 2 · label',
+  _drive_3_status: 'Drive 3 · status sensor', _drive_3_temp: 'Drive 3 · temperature sensor', _drive_3_name: 'Drive 3 · label',
+  _drive_4_status: 'Drive 4 · status sensor', _drive_4_temp: 'Drive 4 · temperature sensor', _drive_4_name: 'Drive 4 · label',
 };
 
 class PcControlCardEditor extends HTMLElement {
@@ -1404,6 +1442,14 @@ class PcControlCardEditor extends HTMLElement {
       flat[`_storage_${i + 1}_total`]  = s.total;
       flat[`_storage_${i + 1}_name`]   = s.name;
     }
+
+    const drives = Array.isArray(migrated.drives) ? migrated.drives : [];
+    for (let i = 0; i < DRIVE_SLOTS; i++) {
+      const d = drives[i] || {};
+      flat[`_drive_${i + 1}_status`] = d.status;
+      flat[`_drive_${i + 1}_temp`]   = d.temp;
+      flat[`_drive_${i + 1}_name`]   = d.name;
+    }
     return flat;
   }
 
@@ -1435,6 +1481,22 @@ class PcControlCardEditor extends HTMLElement {
     if (storages.length) metrics.storages = storages;
     if (Object.keys(metrics).length) next.metrics = metrics;
     else delete next.metrics;
+
+    const drives = [];
+    for (let i = 1; i <= DRIVE_SLOTS; i++) {
+      const status = next[`_drive_${i}_status`];
+      if (status) {
+        const item = { status };
+        if (next[`_drive_${i}_temp`]) item.temp = next[`_drive_${i}_temp`];
+        if (next[`_drive_${i}_name`]) item.name = next[`_drive_${i}_name`];
+        drives.push(item);
+      }
+      delete next[`_drive_${i}_status`];
+      delete next[`_drive_${i}_temp`];
+      delete next[`_drive_${i}_name`];
+    }
+    if (drives.length) next.drives = drives;
+    else delete next.drives;
     return next;
   }
 
