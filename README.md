@@ -144,12 +144,12 @@ restart:  button.nas_reboot                # native Synology DSM button
 shutdown: button.nas_shutdown              # native Synology DSM button
 show_sleep: false                          # most NAS firmware doesn't sleep
 show_restart: true                         # off by default — turn it on for a NAS
-show_gpu_usage: false                      # no GPU on a NAS
+show_gpu: false                            # no GPU on a NAS
 confirm_restart: true
 confirm_shutdown: true
 metrics:
-  cpu_usage: sensor.nas_cpu_utilization_total
-  ram_usage: sensor.nas_memory_usage_real
+  cpu: sensor.nas_cpu_utilization_total
+  ram: sensor.nas_memory_usage_real
   storages:                                # one bar per volume
     - entity: sensor.nas_volume_1_used_space
       total:  sensor.nas_volume_1_total_size   # enable Total size in the integration
