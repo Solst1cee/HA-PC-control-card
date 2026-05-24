@@ -173,6 +173,7 @@ const STYLES = `
   --spc-accent: var(--primary-color, oklch(0.58 0.13 250));
   --spc-warn:   var(--warning-color, #f5a623);
   --spc-alert:  var(--error-color, #db4437);
+  --spc-ok:     var(--success-color, #2f9e6e);
   --spc-bg:     var(--ha-card-background, var(--card-background-color, #fff));
   --spc-fg:     var(--primary-text-color, #1a1a1a);
   --spc-fg-2:   var(--secondary-text-color, #6b7280);
@@ -444,6 +445,22 @@ const STYLES = `
   transition: opacity 220ms, padding 220ms;
 }
 .feature.no-actions .metrics { padding-bottom: 22px; }
+
+/* ── Drive health (NAS) ───────────────────────────────────────── */
+.feature .drive { display: flex; align-items: center; gap: 8px; }
+.feature .drive .ddot {
+  width: 8px; height: 8px; border-radius: 999px;
+  background: var(--spc-fg-2); flex-shrink: 0;
+}
+.feature .drive .ddot.ok  { background: var(--spc-ok); }
+.feature .drive .ddot.bad { background: var(--spc-alert); }
+.feature .drive .dname { font-size: 12px; color: var(--spc-fg); flex: 1; min-width: 0; }
+.feature .drive .dval {
+  font-size: 12px; color: var(--spc-fg-2);
+  font-family: ui-monospace, "SF Mono", Menlo, monospace;
+  font-variant-numeric: tabular-nums;
+}
+.chip .mini-stat .mval.bad { color: var(--spc-alert); }
 `;
 
 // ── Icons (inline SVG strings) ──────────────────────────────────────
@@ -453,6 +470,7 @@ const ICONS = {
   moon:  '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 14.5A8 8 0 1 1 9.5 4a6.5 6.5 0 0 0 10.5 10.5z"/></svg>',
   restart: '<svg viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 12a9 9 0 1 1-2.64-6.36"/><path d="M21 3v5h-5"/></svg>',
   pc:    '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 16v4"/></svg>',
+  nas:   '<svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><rect x="4" y="3" width="16" height="7" rx="1.5"/><rect x="4" y="14" width="16" height="7" rx="1.5"/><path d="M8 6.5h.01"/><path d="M8 17.5h.01"/></svg>',
   spinner: '<svg class="spinner" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2.5" stroke-opacity="0.18"/><path d="M21 12a9 9 0 0 0-9-9" stroke="currentColor" stroke-width="2.5" stroke-linecap="round"/></svg>',
 };
 
@@ -499,11 +517,18 @@ class PcControlCard extends HTMLElement {
       show_gpu_temp:  false,
       show_ram_usage: true,
       show_storage:   true,
+      show_drives:    true,
       accent_color: null,
+      healthy_states: null,
+      icon: 'pc',
       metrics: {},
       ...migrated,
     };
     this._storages = this._normalizeStorages();
+    this._drives = this._normalizeDrives();
+    this._healthyStates = (Array.isArray(this._config.healthy_states) && this._config.healthy_states.length
+      ? this._config.healthy_states
+      : DEFAULT_HEALTHY).map((s) => String(s).toLowerCase());
     this._actions = {
       turn_on:  parseAction(this._config.turn_on),
       sleep:    parseAction(this._config.sleep),
@@ -626,6 +651,37 @@ class PcControlCard extends HTMLElement {
       }];
     }
     return [];
+  }
+
+  // Normalize the optional top-level `drives` array into clean
+  // { status, temp, name } records — one per physical disk. Mirrors
+  // _normalizeStorages; entries without a `status` sensor are dropped.
+  _normalizeDrives() {
+    const d = this._config.drives;
+    if (!Array.isArray(d)) return [];
+    return d
+      .filter((x) => x && x.status)
+      .map((x, i) => ({
+        status: x.status,
+        temp: x.temp || null,
+        name: x.name || (i === 0 ? 'Drive' : `Drive ${i + 1}`),
+      }));
+  }
+
+  // Display string for a drive row: temperature ("38 °C") when a temp
+  // sensor is configured and numeric, otherwise the capitalized status.
+  _driveValue(d) {
+    if (d.temp) {
+      const te = this._hass?.states[d.temp];
+      const n = parseFloat(te?.state);
+      if (Number.isFinite(n)) {
+        const unit = te.attributes?.unit_of_measurement || '°C';
+        return `${Math.round(n)} ${unit}`;
+      }
+    }
+    const st = this._hass?.states[d.status]?.state;
+    if (st) return st.charAt(0).toUpperCase() + st.slice(1);
+    return '—';
   }
 
   // Read a metric sensor and return both a display string and a 0–100
@@ -765,7 +821,7 @@ class PcControlCard extends HTMLElement {
   // ── Build / update ───────────────────────────────────────────
   _build() {
     const variant = this._variant();
-    const html = TEMPLATES[variant](this._storages || []);
+    const html = TEMPLATES[variant](this._storages || [], this._drives || [], ICONS[this._config.icon] || ICONS.pc);
     this.shadowRoot.innerHTML = `<style>${STYLES}</style>${html}`;
 
     // Apply per-card accent color override (config: `accent_color`).
@@ -899,6 +955,26 @@ class PcControlCard extends HTMLElement {
           fillEl.style.width = '0%';
         }
       });
+
+      // Per-drive health rows (status dot + temperature).
+      (this._drives || []).forEach((d, i) => {
+        const row = root.querySelector(`.drive[data-key="drive_${i}"]`);
+        if (!row) return;
+        const enabled = this._config.show_drives !== false;
+        row.style.display = enabled ? '' : 'none';
+        if (!enabled) return;
+        const dot = row.querySelector('.ddot');
+        const valEl = row.querySelector('.dval');
+        if (isOn) {
+          const healthy = driveHealthy(this._hass?.states[d.status]?.state, this._healthyStates);
+          dot.classList.toggle('ok', healthy);
+          dot.classList.toggle('bad', !healthy);
+          valEl.textContent = this._driveValue(d);
+        } else {
+          dot.classList.remove('ok', 'bad');
+          valEl.textContent = '—';
+        }
+      });
     }
 
     // Chip-only: inline uptime + mini stats (cpu/ram/gpu + temps + first disk)
@@ -937,6 +1013,30 @@ class PcControlCard extends HTMLElement {
         // narrower mini-stat column.
         cell.textContent = m ? m.compactValue : '—';
       });
+
+      // Drives summary mini-stat (healthy/total), red if any unhealthy.
+      if ((this._drives || []).length) {
+        const stat = mini.querySelector('.mini-stat[data-key="drives_summary"]');
+        if (stat) {
+          const enabled = this._config.show_drives !== false;
+          stat.style.display = enabled ? '' : 'none';
+          if (enabled) {
+            anyMini = true;
+            const cell = stat.querySelector('.mval');
+            if (isOn) {
+              const total = this._drives.length;
+              const healthy = this._drives.filter(
+                (d) => driveHealthy(this._hass?.states[d.status]?.state, this._healthyStates),
+              ).length;
+              cell.textContent = `${healthy}/${total}`;
+              cell.classList.toggle('bad', healthy < total);
+            } else {
+              cell.textContent = '—';
+              cell.classList.remove('bad');
+            }
+          }
+        }
+      }
       mini.style.display = (isOn && anyMini) ? '' : 'none';
     }
 
@@ -1005,10 +1105,10 @@ class PcControlCard extends HTMLElement {
 // on each setConfig; _update() then fills in the text/classes.
 
 const TEMPLATES = {
-  tile: () => `
+  tile: (_storages, _drives, iconSvg) => `
     <ha-card class="card tile">
       <div class="head">
-        <button class="circle" title="Toggle">${ICONS.pc}</button>
+        <button class="circle" title="Toggle">${iconSvg}</button>
         <div style="min-width:0; flex:1;">
           <div class="name"></div>
           <div class="status"><span class="dot"></span><span class="label"></span><span class="anim"></span></div>
@@ -1023,10 +1123,10 @@ const TEMPLATES = {
     </ha-card>
   `,
 
-  chip: (storages) => `
+  chip: (storages, drives, iconSvg) => `
     <ha-card class="card chip">
       <div class="head">
-        <div class="icon-box chip-icon">${ICONS.pc}<span class="ring" style="display:none"></span></div>
+        <div class="icon-box chip-icon">${iconSvg}<span class="ring" style="display:none"></span></div>
         <div class="meta">
           <div class="name"></div>
           <div class="status">
@@ -1050,6 +1150,12 @@ const TEMPLATES = {
             <div class="mval">—</div>
           </div>
           `).join('')}
+          ${drives.length ? `
+          <div class="mini-stat drives-summary" data-key="drives_summary">
+            <div class="mlabel">DRIVES</div>
+            <div class="mval">—</div>
+          </div>
+          ` : ''}
         </div>
       </div>
       <div class="divider"></div>
@@ -1062,10 +1168,10 @@ const TEMPLATES = {
     </ha-card>
   `,
 
-  feature: (storages) => `
+  feature: (storages, drives, iconSvg) => `
     <ha-card class="card feature">
       <div class="head">
-        <div class="icon-box lg">${ICONS.pc}<span class="ring" style="display:none"></span></div>
+        <div class="icon-box lg">${iconSvg}<span class="ring" style="display:none"></span></div>
         <div class="meta">
           <div class="name"></div>
           <div class="status"><span class="dot"></span><span class="label"></span><span class="anim"></span></div>
@@ -1079,6 +1185,7 @@ const TEMPLATES = {
       <div class="metrics">
         ${METRIC_KEYS.map((k) => metricRow(k, METRIC_LABELS[k])).join('')}
         ${storages.map((s, i) => metricRow(`storage_${i}`, escapeHtml(s.name).toUpperCase())).join('')}
+        ${drives.map((d, i) => driveRow(`drive_${i}`, escapeHtml(d.name).toUpperCase())).join('')}
       </div>
 
       <div class="actions">
@@ -1099,6 +1206,16 @@ function metricRow(key, label) {
         <span class="mval">—</span>
       </div>
       <div class="metric-bar"><div class="fill"></div></div>
+    </div>
+  `;
+}
+
+function driveRow(key, label) {
+  return `
+    <div class="drive" data-key="${key}">
+      <span class="ddot"></span>
+      <span class="dname">${label}</span>
+      <span class="dval">—</span>
     </div>
   `;
 }
