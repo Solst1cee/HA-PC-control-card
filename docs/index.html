@@ -1,0 +1,790 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>PC Control Card · live demo</title>
+<meta name="description" content="A Lovelace custom card for Home Assistant — turn on, sleep, shutdown a PC, with live CPU / GPU usage & temps, RAM, and per-disk metrics. Live demo." />
+
+<!-- The card itself, served from this same Pages site -->
+<script type="module" src="./pc-control-card.js"></script>
+
+<style>
+  :root {
+    /* Variables the card reads — light theme defaults */
+    --primary-color: #3a7bd5;
+    --warning-color: #f5a623;
+    --error-color: #db4437;
+    --card-background-color: #ffffff;
+    --primary-text-color: #1a1a1a;
+    --secondary-text-color: #6b7280;
+    --divider-color: rgba(0,0,0,0.08);
+    --ha-card-border-radius: 18px;
+
+    /* Demo page tokens */
+    --page-bg: oklch(0.965 0.004 80);
+    --page-bg-2: oklch(0.99 0.003 80);
+    --page-fg: oklch(0.22 0.01 80);
+    --page-fg-2: oklch(0.45 0.01 80);
+    --page-border: oklch(0.92 0.005 80);
+  }
+  [data-theme="dark"] {
+    --primary-color: #6aa6f5;
+    --warning-color: #f5a623;
+    --error-color: #ef5350;
+    --card-background-color: #1f2226;
+    --primary-text-color: #f1f3f5;
+    --secondary-text-color: #9aa1a8;
+    --divider-color: rgba(255,255,255,0.08);
+
+    --page-bg:    #121417;
+    --page-bg-2:  #1a1d21;
+    --page-fg:    #f1f3f5;
+    --page-fg-2:  #9aa1a8;
+    --page-border: rgba(255,255,255,0.08);
+  }
+
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; min-height: 100%; }
+  body {
+    background: var(--page-bg);
+    color: var(--page-fg);
+    font-family: -apple-system, "Helvetica Neue", Helvetica, Arial, sans-serif;
+    -webkit-font-smoothing: antialiased;
+    transition: background 200ms, color 200ms;
+  }
+
+  /* ── Layout ───────────────────────────────────────────────── */
+  .wrap { max-width: 1320px; margin: 0 auto; padding: 56px 32px 96px; }
+  header { display: flex; align-items: flex-start; justify-content: space-between; gap: 24px; flex-wrap: wrap; margin-bottom: 36px; }
+  .title { font-size: 28px; font-weight: 600; letter-spacing: -0.02em; margin: 0; }
+  .subtitle { color: var(--page-fg-2); margin: 6px 0 0; font-size: 15px; max-width: 56ch; line-height: 1.5; }
+  .repolinks { display: flex; gap: 8px; flex-shrink: 0; }
+  .repolinks a {
+    display: inline-flex; align-items: center; gap: 6px;
+    padding: 8px 12px; font-size: 13px; font-weight: 500;
+    border-radius: 10px;
+    border: 1px solid var(--page-border);
+    background: var(--page-bg-2);
+    color: var(--page-fg);
+    text-decoration: none;
+    transition: background 160ms, transform 90ms;
+  }
+  .repolinks a:hover { background: color-mix(in oklab, var(--page-fg) 6%, var(--page-bg-2)); }
+  .repolinks a:active { transform: scale(0.97); }
+
+  /* ── Demo controls ───────────────────────────────────────── */
+  .controls {
+    display: flex; flex-direction: column; gap: 10px;
+    padding: 14px; border-radius: 14px;
+    background: var(--page-bg-2);
+    border: 1px solid var(--page-border);
+    margin-bottom: 28px;
+  }
+  .controls-row {
+    display: flex; flex-wrap: wrap; gap: 8px;
+    align-items: center;
+  }
+  .ctrl-label {
+    font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase;
+    color: var(--page-fg-2); margin-right: 4px;
+  }
+  .seg {
+    display: inline-flex; padding: 3px; gap: 2px;
+    background: var(--page-bg);
+    border: 1px solid var(--page-border);
+    border-radius: 10px;
+  }
+  .seg button {
+    background: transparent; border: none; cursor: pointer;
+    padding: 6px 12px; font-size: 12.5px; font-weight: 500;
+    color: var(--page-fg-2);
+    border-radius: 7px;
+    font-family: inherit;
+    transition: background 160ms, color 160ms;
+  }
+  .seg button.active { background: var(--page-bg-2); color: var(--page-fg); box-shadow: 0 1px 2px rgba(0,0,0,0.06); }
+  .seg button:hover:not(.active) { color: var(--page-fg); }
+  .swatches { display: inline-flex; gap: 6px; }
+  .swatches button {
+    width: 24px; height: 24px; border-radius: 999px;
+    background: var(--sw, #888);
+    border: 2px solid var(--page-bg-2);
+    box-shadow: 0 0 0 1px var(--page-border);
+    cursor: pointer; padding: 0;
+    transition: transform 90ms cubic-bezier(.2,.7,.2,1), box-shadow 160ms;
+  }
+  .swatches button:hover { transform: scale(1.08); }
+  .swatches button.active { box-shadow: 0 0 0 2px var(--page-fg); }
+  /* "Custom" swatch — conic rainbow tells users this slot follows the
+     adjacent textbox. The --sw fallback only paints when no custom
+     color has been chosen yet. */
+  .swatches button.custom-sw {
+    background:
+      conic-gradient(from 90deg,
+        oklch(0.7 0.18 30),  oklch(0.78 0.16 90),
+        oklch(0.72 0.18 150), oklch(0.68 0.17 230),
+        oklch(0.6 0.2 295),   oklch(0.7 0.2 360),
+        oklch(0.7 0.18 30));
+  }
+  .swatches button.custom-sw.has-color { background: var(--sw); }
+  .accent-input {
+    width: 92px;
+    padding: 6px 10px;
+    font: inherit; font-size: 12.5px; font-weight: 500;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    color: var(--page-fg);
+    background: var(--page-bg);
+    border: 1px solid var(--page-border);
+    border-radius: 8px;
+    outline: none;
+    transition: border-color 160ms, box-shadow 160ms;
+  }
+  .accent-input::placeholder { color: var(--page-fg-2); }
+  .accent-input:focus {
+    border-color: color-mix(in oklab, var(--page-fg) 30%, var(--page-border));
+    box-shadow: 0 0 0 3px color-mix(in oklab, var(--page-fg) 8%, transparent);
+  }
+  .accent-input.invalid {
+    border-color: color-mix(in oklab, var(--error-color, #db4437) 60%, var(--page-border));
+  }
+  .spacer { flex: 1; }
+
+  /* ── Card grid ───────────────────────────────────────────── */
+  .grid { display: grid; gap: 24px; grid-template-columns: 1fr; }
+  @media (min-width: 760px)  { .grid { grid-template-columns: 1fr 1fr; align-items: start; } }
+  @media (min-width: 1100px) { .grid { grid-template-columns: 340px 1fr 1fr; } }
+
+  .demo-slot {
+    /* Use a clearly distinct gray as the slot bg so the white cards
+       pop, mimicking how a real HA dashboard background contrasts
+       with its cards. */
+    background: oklch(0.93 0.005 80);
+    border: 1px solid var(--page-border);
+    border-radius: 22px;
+    padding: 24px;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  [data-theme="dark"] .demo-slot { background: #15171a; }
+  .demo-slot h3 { margin: 0; font-size: 14px; font-weight: 600; letter-spacing: -0.01em; }
+  .demo-slot p { margin: 0; font-size: 13px; color: var(--page-fg-2); line-height: 1.5; }
+  .card-host { width: 100%; }
+  .card-host pc-control-card {
+    display: block;
+    /* Stronger shadow in the demo so the cards stand out clearly
+       against the slot background, even for the smaller tile/chip
+       variants where the card is mostly empty space. */
+    --ha-card-box-shadow: 0 1px 3px rgba(0,0,0,0.08), 0 12px 32px -10px rgba(0,0,0,0.18);
+  }
+  /* Also slightly darken the border so it reads on light backgrounds */
+  pc-control-card { --divider-color: rgba(0,0,0,0.14); }
+  [data-theme="dark"] pc-control-card { --divider-color: rgba(255,255,255,0.12); }
+  /* Constrain card widths so they look like dashboard tiles, not stretched */
+  .demo-slot.tile     .card-host { max-width: 340px; }
+  .demo-slot.chip     .card-host { max-width: 460px; }
+  .demo-slot.feature  .card-host { max-width: 380px; }
+
+  /* ── Install + footer ────────────────────────────────────── */
+  .install {
+    margin-top: 48px;
+    padding: 24px;
+    border-radius: 18px;
+    background: var(--page-bg-2);
+    border: 1px solid var(--page-border);
+  }
+  .install h2 { margin: 0 0 8px; font-size: 18px; letter-spacing: -0.01em; }
+  .install p  { margin: 0 0 12px; font-size: 14px; color: var(--page-fg-2); line-height: 1.55; }
+  pre {
+    margin: 0; padding: 16px;
+    background: var(--page-bg);
+    border: 1px solid var(--page-border);
+    border-radius: 12px;
+    font-family: ui-monospace, "SF Mono", Menlo, monospace;
+    font-size: 12.5px;
+    line-height: 1.55;
+    color: var(--page-fg);
+    overflow-x: auto;
+  }
+  .yaml-wrap { position: relative; }
+  .copy-btn {
+    position: absolute; top: 10px; right: 10px;
+    padding: 6px 12px; font-size: 12px; font-weight: 500;
+    border-radius: 8px;
+    border: 1px solid var(--page-border);
+    background: var(--page-bg-2);
+    color: var(--page-fg);
+    font-family: inherit;
+    cursor: pointer;
+    transition: background 160ms, transform 90ms cubic-bezier(.2,.7,.2,1);
+  }
+  .copy-btn:hover { background: color-mix(in oklab, var(--page-fg) 6%, var(--page-bg-2)); }
+  .copy-btn:active { transform: scale(0.97); }
+  .copy-btn.copied { background: color-mix(in oklab, oklch(0.62 0.13 145) 18%, var(--page-bg-2)); }
+  .footer {
+    margin-top: 32px;
+    color: var(--page-fg-2);
+    font-size: 12.5px;
+    text-align: center;
+  }
+  .footer a { color: var(--page-fg-2); }
+
+  /* Loading fallback while jsDelivr fetches the card */
+  pc-control-card:not(:defined) {
+    display: block;
+    height: 160px;
+    border-radius: 18px;
+    background: linear-gradient(90deg,
+      color-mix(in oklab, var(--page-fg) 4%, transparent),
+      color-mix(in oklab, var(--page-fg) 8%, transparent),
+      color-mix(in oklab, var(--page-fg) 4%, transparent));
+    background-size: 200% 100%;
+    animation: shimmer 1.4s linear infinite;
+    border: 1px solid var(--page-border);
+  }
+  @keyframes shimmer { 0% { background-position: 200% 0; } 100% { background-position: -200% 0; } }
+</style>
+</head>
+<body>
+
+<div class="wrap">
+  <header>
+    <div>
+      <h1 class="title">PC Control Card</h1>
+      <p class="subtitle">
+        A Lovelace custom card for Home Assistant. Turn on, sleep, shutdown your PC with live CPU&nbsp;/&nbsp;GPU usage &amp; temperatures, RAM, and per&#8209;disk metrics. Three variants, one file, follows your HA theme.
+      </p>
+    </div>
+    <div class="repolinks">
+      <a href="https://github.com/Solst1cee/HA-PC-control-card" target="_blank" rel="noopener">GitHub ↗</a>
+      <a href="https://github.com/Solst1cee/HA-PC-control-card/releases" target="_blank" rel="noopener">Releases ↗</a>
+    </div>
+  </header>
+
+  <div class="controls">
+    <div class="controls-row">
+      <span class="ctrl-label">PC state</span>
+      <div class="seg" id="state-seg">
+        <button data-state="off">Off</button>
+        <button data-state="on" class="active">On</button>
+        <button data-state="booting">Booting</button>
+        <button data-state="shutting">Shutting</button>
+      </div>
+
+      <span class="ctrl-label" style="margin-left: 12px;">Metrics</span>
+      <div class="seg" id="metrics-seg">
+        <button data-metric="cpu_usage" class="active">CPU</button>
+        <button data-metric="cpu_temp">CPU°</button>
+        <button data-metric="gpu_usage" class="active">GPU</button>
+        <button data-metric="gpu_temp">GPU°</button>
+        <button data-metric="ram_usage" class="active">RAM</button>
+        <button data-metric="storage">Disk</button>
+      </div>
+
+      <span class="ctrl-label" style="margin-left: 12px;">RAM</span>
+      <div class="seg" id="ram-units-seg">
+        <button data-units="percent" class="active">%</button>
+        <button data-units="absolute">GB</button>
+      </div>
+
+      <span class="ctrl-label" style="margin-left: 12px;">Disk</span>
+      <div class="seg" id="disk-units-seg">
+        <button data-units="percent" class="active">%</button>
+        <button data-units="absolute">GB</button>
+      </div>
+    </div>
+
+    <div class="controls-row">
+      <span class="ctrl-label">Buttons</span>
+      <div class="seg" id="buttons-seg">
+        <button data-btn="turn_on" class="active">Turn on</button>
+        <button data-btn="sleep" class="active">Sleep</button>
+        <button data-btn="shutdown" class="active">Shut down</button>
+      </div>
+
+      <span class="ctrl-label" style="margin-left: 12px;">Accent</span>
+      <div class="swatches" id="accent-seg">
+        <button data-accent="" class="active" title="HA default (—primary-color)" style="--sw:#3a7bd5"></button>
+        <button data-accent="#2f9e6e" title="Green" style="--sw:#2f9e6e"></button>
+        <button data-accent="#7a5af8" title="Purple" style="--sw:#7a5af8"></button>
+        <button data-accent="#e07a3c" title="Orange" style="--sw:#e07a3c"></button>
+        <button data-accent="#db4437" title="Red" style="--sw:#db4437"></button>
+        <button data-accent="#1a1a1a" title="Mono" style="--sw:#1a1a1a"></button>
+        <button data-accent="__custom" class="custom-sw" title="Custom color"></button>
+      </div>
+      <input type="text" id="accent-custom" class="accent-input" placeholder="#hex" maxlength="9" spellcheck="false" />
+
+      <span class="ctrl-label" style="margin-left: 12px;">Theme</span>
+      <div class="seg" id="theme-seg">
+        <button data-theme="light" class="active">Light</button>
+        <button data-theme="dark">Dark</button>
+      </div>
+    </div>
+  </div>
+
+  <div class="grid">
+    <div class="demo-slot tile">
+      <h3>Variant A · Tile (compact)</h3>
+      <p>One‑row tile. Big tappable icon for the primary toggle, three compact action buttons below.</p>
+      <div class="card-host">
+        <pc-control-card id="card-tile"></pc-control-card>
+      </div>
+    </div>
+
+    <div class="demo-slot chip">
+      <h3>Variant B · Chip (Mushroom‑style)</h3>
+      <p>Icon chip with inline uptime and mini CPU/GPU stats. A middle ground between tile and feature.</p>
+      <div class="card-host">
+        <pc-control-card id="card-chip"></pc-control-card>
+      </div>
+    </div>
+
+    <div class="demo-slot feature">
+      <h3>Variant C · Feature (with metrics)</h3>
+      <p>Full card with live CPU / RAM / GPU bars, uptime, and a clean action footer.</p>
+      <div class="card-host">
+        <pc-control-card id="card-feature"></pc-control-card>
+      </div>
+    </div>
+  </div>
+
+  <section class="install">
+    <h2>Try it in Home Assistant</h2>
+    <p>Install via HACS as a custom repository, then paste this into a Manual card. The snippet below reflects your live demo choices — accent color, visible buttons, etc.</p>
+    <div class="yaml-wrap">
+      <button class="copy-btn" id="copy-yaml" type="button">Copy</button>
+      <pre><code id="yaml-snippet"></code></pre>
+    </div>
+  </section>
+
+  <div class="footer">
+    Buttons in the demo above are live — clicking them mutates a mocked Home Assistant state so you can preview every transition. MIT · <a href="https://github.com/Solst1cee/HA-PC-control-card">source</a>
+  </div>
+</div>
+
+<script type="module">
+  // ── Minimal mock of HA's `hass` object ─────────────────────────
+  // The card reads .states[entity_id].state / .last_changed and
+  // calls .callService(domain, service, { entity_id }). That's it.
+  const ENTITIES = {
+    'binary_sensor.pc_status':      { state: 'on',  changed: -1000*60*60*27 - 1000*60*13, attrs: {} },
+    'switch.my_pc':                 { state: 'on',  changed: -1000*60*60*27, attrs: {} },
+    'button.my_pc_sleep':           { state: 'unknown', changed: 0, attrs: {} },
+    'button.my_pc_shutdown':        { state: 'unknown', changed: 0, attrs: {} },
+    'sensor.my_pc_cpu_percent':     { state: '18',  changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.my_pc_cpu_temp':        { state: '54',  changed: 0, attrs: { unit_of_measurement: '°C' } },
+    'sensor.my_pc_ram_percent':     { state: '42',  changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.my_pc_gpu_load':        { state: '51',  changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.my_pc_gpu_temp':        { state: '62',  changed: 0, attrs: { unit_of_measurement: '°C' } },
+    'sensor.my_pc_storage_percent': { state: '67',  changed: 0, attrs: { unit_of_measurement: '%' } },
+    // Absolute-mode counterparts (used + total). Demo toggles between
+    // percent and absolute by swapping the entity ids passed to setConfig.
+    'sensor.my_pc_ram_used':        { state: '6.8', changed: 0, attrs: { unit_of_measurement: 'GB' } },
+    'sensor.my_pc_ram_total':       { state: '16',  changed: 0, attrs: { unit_of_measurement: 'GB' } },
+    'sensor.my_pc_storage_used':    { state: '340', changed: 0, attrs: { unit_of_measurement: 'GB' } },
+    'sensor.my_pc_storage_total':   { state: '500', changed: 0, attrs: { unit_of_measurement: 'GB' } },
+    // Second disk — demonstrates multi-disk support.
+    'sensor.my_pc_storage2_percent':{ state: '23',  changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.my_pc_storage2_used':   { state: '1.2', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.my_pc_storage2_total':  { state: '4',   changed: 0, attrs: { unit_of_measurement: 'TB' } },
+  };
+
+  const listeners = new Set();
+  const now = Date.now();
+  const states = {};
+  for (const [id, e] of Object.entries(ENTITIES)) {
+    states[id] = {
+      entity_id: id,
+      state: e.state,
+      last_changed: new Date(now + e.changed).toISOString(),
+      attributes: e.attrs,
+    };
+  }
+
+  function setState(id, newState) {
+    states[id] = {
+      ...states[id],
+      state: String(newState),
+      last_changed: new Date().toISOString(),
+    };
+    publish();
+  }
+  function publish() {
+    // Replace the hass object reference so cards re-render via their setter.
+    hass = { ...hass, states };
+    for (const fn of listeners) fn(hass);
+  }
+
+  let pendingBootTimer = null;
+  let pendingShutTimer = null;
+  let pendingSleepTimer = null;
+
+  let hass = {
+    states,
+    callService(domain, service, data) {
+      const ent = data?.entity_id;
+      // turn_on → boot delay → status flips on
+      if (domain === 'switch' && service === 'turn_on') {
+        clearTimeout(pendingBootTimer);
+        pendingBootTimer = setTimeout(() => setState('binary_sensor.pc_status', 'on'), 3200);
+      }
+      // button.press → infer action from entity id
+      if (domain === 'button' && service === 'press') {
+        if (ent?.includes('shutdown')) {
+          clearTimeout(pendingShutTimer);
+          pendingShutTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2600);
+        } else if (ent?.includes('sleep')) {
+          clearTimeout(pendingSleepTimer);
+          pendingSleepTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2000);
+        }
+      }
+    },
+  };
+
+  // ── Configure + bind cards ──────────────────────────────────────
+  // Single source of truth for demo state. The segmented controls in
+  // the markup mirror these defaults via their `active` classes; if
+  // a default changes here, also update the matching `class="active"`
+  // attribute in the HTML above. Everything else (configure,
+  // updateYaml, control handlers) reads through `state` so values
+  // can't drift apart at runtime.
+  const DEFAULTS = Object.freeze({
+    visibility: { turn_on: true, sleep: true, shutdown: true },
+    metricVis: {
+      cpu_usage: true,
+      cpu_temp:  false,
+      gpu_usage: true,
+      gpu_temp:  false,
+      ram_usage: true,
+      storage:   false,
+    },
+    ramUnits:  'percent',  // 'percent' | 'absolute' (RAM display)
+    diskUnits: 'percent',  // 'percent' | 'absolute' (Disk display, independent)
+    accent:    '',         // '' = HA default (use --primary-color)
+  });
+  const state = {
+    visibility: { ...DEFAULTS.visibility },
+    metricVis:  { ...DEFAULTS.metricVis },
+    ramUnits:   DEFAULTS.ramUnits,
+    diskUnits:  DEFAULTS.diskUnits,
+    accent:     DEFAULTS.accent,
+  };
+
+  // Wait for the custom element to be defined before configuring.
+  customElements.whenDefined('pc-control-card').then(() => {
+    const tile = document.getElementById('card-tile');
+    const chip = document.getElementById('card-chip');
+    const feat = document.getElementById('card-feature');
+
+    function configure() {
+      // RAM & Disk units are chosen independently. In absolute mode,
+      // swap to used + total entities; in percent mode, use the
+      // single % sensor.
+      const ramAbs  = state.ramUnits  === 'absolute';
+      const diskAbs = state.diskUnits === 'absolute';
+      const metrics = {
+        cpu_usage: 'sensor.my_pc_cpu_percent',
+        cpu_temp:  'sensor.my_pc_cpu_temp',
+        gpu_usage: 'sensor.my_pc_gpu_load',
+        gpu_temp:  'sensor.my_pc_gpu_temp',
+        ram_usage:       ramAbs ? 'sensor.my_pc_ram_used'  : 'sensor.my_pc_ram_percent',
+        ram_usage_total: ramAbs ? 'sensor.my_pc_ram_total' : undefined,
+        // Always supply two disks so multi-disk rendering is visible
+        // when the Storage toggle is enabled.
+        storages: [
+          {
+            entity: diskAbs ? 'sensor.my_pc_storage_used'  : 'sensor.my_pc_storage_percent',
+            total:  diskAbs ? 'sensor.my_pc_storage_total' : undefined,
+            name:   'System',
+          },
+          {
+            entity: diskAbs ? 'sensor.my_pc_storage2_used'  : 'sensor.my_pc_storage2_percent',
+            total:  diskAbs ? 'sensor.my_pc_storage2_total' : undefined,
+            name:   'Media',
+          },
+        ],
+      };
+      const base = {
+        status_entity: 'binary_sensor.pc_status',
+        turn_on:  'switch.my_pc',
+        sleep:    'button.my_pc_sleep',
+        shutdown: 'button.my_pc_shutdown',
+        confirm_shutdown: true,
+        confirm_sleep: false,
+        show_turn_on:   state.visibility.turn_on,
+        show_sleep:     state.visibility.sleep,
+        show_shutdown:  state.visibility.shutdown,
+        show_cpu_usage: state.metricVis.cpu_usage,
+        show_cpu_temp:  state.metricVis.cpu_temp,
+        show_gpu_usage: state.metricVis.gpu_usage,
+        show_gpu_temp:  state.metricVis.gpu_temp,
+        show_ram_usage: state.metricVis.ram_usage,
+        show_storage:   state.metricVis.storage,
+        accent_color:   state.accent || null,
+        metrics,
+      };
+      tile.setConfig({ ...base, variant: 'tile',    name: 'My PC' });
+      chip.setConfig({ ...base, variant: 'chip',    name: 'My PC' });
+      feat.setConfig({ ...base, variant: 'feature', name: 'My PC' });
+      // Re-apply current hass since setConfig wipes the shadow DOM.
+      [tile, chip, feat].forEach((c) => { c.hass = hass; });
+    }
+
+    // Mutate state, reconfigure cards, regenerate YAML. Every control
+    // handler goes through this so the three side effects stay in
+    // lockstep.
+    window.__applyDemoChange = (mutator) => {
+      mutator(state);
+      configure();
+      updateYaml();
+    };
+
+    configure();
+    const push = (h) => { tile.hass = h; chip.hass = h; feat.hass = h; };
+    listeners.add(push);
+    push(hass);
+    updateYaml();
+  });
+
+  // Generate the YAML snippet from current demo state so users can
+  // copy it straight into HA with their preview choices already baked
+  // in. Reads `state` directly — same source of truth as configure().
+  function updateYaml() {
+    const { visibility, metricVis, ramUnits, diskUnits, accent } = state;
+    const ramAbs  = ramUnits  === 'absolute';
+    const diskAbs = diskUnits === 'absolute';
+
+    const accentLine = accent
+      ? `accent_color: "${accent}"  # per‑card accent override`
+      : `# accent_color: "#7a5af8"  # uncomment to override HA's theme accent`;
+
+    const ramLines = ramAbs ? [
+      '  ram_usage: sensor.YOUR_PC_RAM_USED          # numeric "used" sensor (e.g. GB)',
+      '  ram_usage_total: sensor.YOUR_PC_RAM_TOTAL    # providing total flips display to "used / total"',
+    ] : [
+      '  ram_usage: sensor.YOUR_PC_RAM_PERCENT',
+    ];
+    const storageLines = diskAbs ? [
+      '  storages:',
+      '    - entity: sensor.YOUR_DISK_1_USED   # used (GB / TB)',
+      '      total: sensor.YOUR_DISK_1_TOTAL    # total → "used / total" display',
+      '      name: System                       # optional label',
+      '    - entity: sensor.YOUR_DISK_2_USED',
+      '      total: sensor.YOUR_DISK_2_TOTAL',
+      '      name: Media',
+    ] : [
+      '  storages:',
+      '    - entity: sensor.YOUR_DISK_1_PERCENT  # no total → percent display',
+      '      name: System',
+      '    - entity: sensor.YOUR_DISK_2_PERCENT',
+      '      name: Media',
+    ];
+
+    const yaml = [
+      'type: custom:pc-control-card',
+      'variant: feature        # or "tile" or "chip"',
+      'name: My PC',
+      'status_entity: binary_sensor.YOUR_PC_PING   # `on` when reachable',
+      'turn_on:  switch.YOUR_PC_WOL                # Wake-on-LAN switch / wake script',
+      'sleep:    button.YOUR_PC_SLEEP',
+      'shutdown: button.YOUR_PC_SHUTDOWN',
+      'confirm_shutdown: true',
+      'confirm_sleep: false',
+      `show_turn_on:   ${visibility.turn_on}`,
+      `show_sleep:     ${visibility.sleep}`,
+      `show_shutdown:  ${visibility.shutdown}`,
+      `show_cpu_usage: ${metricVis.cpu_usage}`,
+      `show_cpu_temp:  ${metricVis.cpu_temp}`,
+      `show_gpu_usage: ${metricVis.gpu_usage}`,
+      `show_gpu_temp:  ${metricVis.gpu_temp}`,
+      `show_ram_usage: ${metricVis.ram_usage}`,
+      `show_storage:   ${metricVis.storage}`,
+      accentLine,
+      'metrics:',
+      '  cpu_usage: sensor.YOUR_PC_CPU_PERCENT',
+      '  cpu_temp:  sensor.YOUR_PC_CPU_TEMP    # °C — omit if you don\'t have one',
+      '  gpu_usage: sensor.YOUR_PC_GPU_LOAD',
+      '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
+      ...ramLines,
+      ...storageLines,
+    ].join('\n');
+
+    document.getElementById('yaml-snippet').textContent = yaml;
+  }
+
+  // Copy button
+  document.getElementById('copy-yaml').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const text = document.getElementById('yaml-snippet').textContent;
+    try {
+      await navigator.clipboard.writeText(text);
+      btn.textContent = 'Copied!';
+      btn.classList.add('copied');
+      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1600);
+    } catch (_) {
+      btn.textContent = 'Copy failed';
+      setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+    }
+  });
+
+  // ── Metric drift while "on" ────────────────────────────────────
+  setInterval(() => {
+    if (states['binary_sensor.pc_status'].state !== 'on') return;
+    const drift = (k, lo, hi) => {
+      const cur = parseFloat(states[k].state) || (lo + hi) / 2;
+      const next = Math.max(lo, Math.min(hi, cur + (Math.random() - 0.5) * 12));
+      setState(k, next.toFixed(0));
+    };
+    drift('sensor.my_pc_cpu_percent',         8,  92);
+    drift('sensor.my_pc_cpu_temp',            38, 78);
+    drift('sensor.my_pc_ram_percent',         32, 78);
+    drift('sensor.my_pc_ram_used',            5.5, 12);
+    drift('sensor.my_pc_gpu_load',            35, 80);
+    drift('sensor.my_pc_gpu_temp',            42, 82);
+    drift('sensor.my_pc_storage_percent',     60, 72);
+    drift('sensor.my_pc_storage_used',        320, 380);
+    drift('sensor.my_pc_storage2_percent',    20, 30);
+    drift('sensor.my_pc_storage2_used',       1.0, 1.5);
+  }, 1500);
+
+  // ── Demo controls ──────────────────────────────────────────────
+  const stateSeg = document.getElementById('state-seg');
+  stateSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-state]');
+    if (!btn) return;
+    stateSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+
+    const s = btn.dataset.state;
+    // Cancel any in-flight mock transitions when forcing a state.
+    clearTimeout(pendingBootTimer);
+    clearTimeout(pendingShutTimer);
+    clearTimeout(pendingSleepTimer);
+
+    if (s === 'off')       setState('binary_sensor.pc_status', 'off');
+    if (s === 'on')        setState('binary_sensor.pc_status', 'on');
+    if (s === 'booting') {
+      setState('binary_sensor.pc_status', 'off');
+      hass.callService('switch', 'turn_on', { entity_id: 'switch.my_pc' });
+    }
+    if (s === 'shutting') {
+      setState('binary_sensor.pc_status', 'on');
+      // small delay so the card sees "on" first, then the shutdown press
+      setTimeout(() => hass.callService('button', 'press', { entity_id: 'button.my_pc_shutdown' }), 50);
+      // arm + confirm in a single beat — call again to bypass the 2-tap arm
+      setTimeout(() => hass.callService('button', 'press', { entity_id: 'button.my_pc_shutdown' }), 100);
+    }
+  });
+
+  const themeSeg = document.getElementById('theme-seg');
+  themeSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-theme]');
+    if (!btn) return;
+    themeSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    document.documentElement.dataset.theme = btn.dataset.theme;
+  });
+
+  // Buttons-visibility toggles — each acts independently (multi-select).
+  const buttonsSeg = document.getElementById('buttons-seg');
+  buttonsSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-btn]');
+    if (!btn) return;
+    const nextActive = !btn.classList.contains('active');
+    btn.classList.toggle('active', nextActive);
+    window.__applyDemoChange?.((s) => { s.visibility[btn.dataset.btn] = nextActive; });
+  });
+
+  // Accent color swatches — single-select. The last swatch is "custom"
+  // and pairs with the #accent-custom textbox.
+  const accentSeg = document.getElementById('accent-seg');
+  const accentInput = document.getElementById('accent-custom');
+
+  function isValidColor(v) {
+    if (!v) return false;
+    // CSS.supports is the cheapest cross-format validator (hex,
+    // oklch(), rgb(), named colors all return true; gibberish false).
+    return CSS.supports('color', v);
+  }
+  function selectAccentButton(btn) {
+    accentSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  function applyAccent(value) {
+    window.__applyDemoChange?.((s) => { s.accent = value; });
+  }
+
+  accentSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-accent]');
+    if (!btn) return;
+    selectAccentButton(btn);
+    if (btn.dataset.accent === '__custom') {
+      const v = accentInput.value.trim();
+      const valid = isValidColor(v);
+      accentInput.classList.toggle('invalid', !!v && !valid);
+      applyAccent(valid ? v : '');
+      // Reflect chosen color on the swatch itself for visual feedback.
+      btn.classList.toggle('has-color', valid);
+      if (valid) btn.style.setProperty('--sw', v);
+    } else {
+      applyAccent(btn.dataset.accent);
+    }
+  });
+
+  // Typing in the custom input applies live and auto-selects the
+  // custom swatch so the active state matches what's being rendered.
+  accentInput.addEventListener('input', () => {
+    const v = accentInput.value.trim();
+    const valid = isValidColor(v);
+    accentInput.classList.toggle('invalid', !!v && !valid);
+
+    const customBtn = accentSeg.querySelector('button[data-accent="__custom"]');
+    if (!v) {
+      // Empty input → fall back to HA default (first swatch).
+      customBtn.classList.remove('has-color');
+      customBtn.style.removeProperty('--sw');
+      const def = accentSeg.querySelector('button[data-accent=""]');
+      selectAccentButton(def);
+      applyAccent('');
+      return;
+    }
+    selectAccentButton(customBtn);
+    if (valid) {
+      customBtn.classList.add('has-color');
+      customBtn.style.setProperty('--sw', v);
+      applyAccent(v);
+    }
+  });
+
+  // Metrics-visibility toggles — multi-select.
+  const metricsSeg = document.getElementById('metrics-seg');
+  metricsSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-metric]');
+    if (!btn) return;
+    const nextActive = !btn.classList.contains('active');
+    btn.classList.toggle('active', nextActive);
+    window.__applyDemoChange?.((s) => { s.metricVis[btn.dataset.metric] = nextActive; });
+  });
+
+  // RAM unit toggle — single-select.
+  const ramUnitsSeg = document.getElementById('ram-units-seg');
+  ramUnitsSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-units]');
+    if (!btn) return;
+    ramUnitsSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    window.__applyDemoChange?.((s) => { s.ramUnits = btn.dataset.units; });
+  });
+
+  // Disk unit toggle — single-select.
+  const diskUnitsSeg = document.getElementById('disk-units-seg');
+  diskUnitsSeg.addEventListener('click', (e) => {
+    const btn = e.target.closest('button[data-units]');
+    if (!btn) return;
+    diskUnitsSeg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    window.__applyDemoChange?.((s) => { s.diskUnits = btn.dataset.units; });
+  });
+</script>
+
+</body>
+</html>

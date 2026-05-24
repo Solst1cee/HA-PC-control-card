@@ -1,0 +1,41 @@
+name: Release
+
+# When you publish a GitHub Release, this workflow:
+#   1. Stamps the release tag into CARD_VERSION
+#   2. Syncs the same file into docs/ (so the GitHub Pages live demo
+#      always reflects the latest released code)
+#   3. Attaches pc-control-card.js to the Release as an asset for HACS
+#      and manual users.
+
+on:
+  release:
+    types: [published]
+
+permissions:
+  contents: write
+
+jobs:
+  release:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Stamp version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          sed -i "s/const CARD_VERSION = '[^']*';/const CARD_VERSION = '${TAG}';/" pc-control-card.js
+          head -n 30 pc-control-card.js
+
+      - name: Sync docs/ copy for GitHub Pages demo
+        run: |
+          cp pc-control-card.js docs/pc-control-card.js
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/pc-control-card.js pc-control-card.js
+          git commit -m "chore: stamp ${GITHUB_REF_NAME} + sync docs demo" || echo "nothing to commit"
+          git push origin HEAD:${{ github.event.repository.default_branch }} || true
+
+      - name: Upload release asset
+        uses: softprops/action-gh-release@v2
+        with:
+          files: pc-control-card.js

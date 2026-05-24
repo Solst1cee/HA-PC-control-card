@@ -1,0 +1,14 @@
+# Logs
+*.log
+npm-debug.log*
+
+# Node / editor
+node_modules/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db
+
+# Build output (none — single-file card)
+dist/
+build/
