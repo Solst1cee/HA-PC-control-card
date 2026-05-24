@@ -1,0 +1,27 @@
+name: HACS Validation
+
+# Runs the HACS validator on every PR + push to main, plus once a day.
+# Required for submission to https://github.com/hacs/default.
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: "0 0 * * *"   # daily so the badge stays current
+
+permissions:
+  contents: read
+
+jobs:
+  hacs:
+    name: HACS validation
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: HACS Action
+        uses: hacs/action@main
+        with:
+          category: plugin
