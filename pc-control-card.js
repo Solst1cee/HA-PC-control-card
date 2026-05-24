@@ -462,7 +462,7 @@ class PcControlCard extends HTMLElement {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
-    this._pending = null;     // 'on' | 'sleep' | 'shutdown'
+    this._pending = null;     // 'on' | 'sleep' | 'restart' | 'shutdown'
     this._pendingSince = 0;
     this._armed = { sleep: false, shutdown: false, restart: false };
     this._restartDipped = false;

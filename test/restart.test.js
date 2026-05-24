@@ -61,3 +61,30 @@ test('restarting clears after status dips then returns to on', () => {
   assert.equal(card._derivedStatus(), 'on');
   card.disconnectedCallback();
 });
+
+test('confirm_restart arms on first press, fires on second', () => {
+  const card = nasCard({ confirm_restart: true });
+  const calls = [];
+  card.hass = onHass(calls);
+  card._onRestart();                            // first press → arm only
+  assert.equal(calls.length, 0);
+  assert.equal(card._armed.restart, true);
+  assert.equal(card._derivedStatus(), 'on');    // not yet restarting
+  card._onRestart();                            // second press → fire
+  assert.deepEqual(calls, [['button', 'press', { entity_id: 'button.nas_reboot' }]]);
+  assert.equal(card._derivedStatus(), 'restarting');
+  card.disconnectedCallback();
+});
+
+test('restarting clears via the timeout fallback when the dip is never seen', () => {
+  const card = nasCard();
+  const base = (st) => ({ states: { 'binary_sensor.nas': { state: st, last_changed: new Date().toISOString(), attributes: {} } }, callService() {} });
+  card.hass = base('on');
+  card._onRestart();
+  assert.equal(card._derivedStatus(), 'restarting');
+  // Simulate elapsed time beyond RESTART_TIMEOUT_MS (300s) without ever observing a dip.
+  card._pendingSince = Date.now() - 301_000;
+  card.hass = base('on');   // still on, never dipped
+  assert.equal(card._derivedStatus(), 'on');
+  card.disconnectedCallback();
+});
