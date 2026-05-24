@@ -123,34 +123,50 @@ metrics:
 
 You can mix both — drop the tile on a phone view and the feature card on a wall display, both pointing at the same entities.
 
-### NAS / multi-disk setup
+### NAS / Synology setup
 
-The same card works for a NAS — hide the GPU, add multiple disks:
+The same card works for a NAS. **No agent is needed on the NAS** — Home Assistant's built-in **[Synology DSM](https://www.home-assistant.io/integrations/synology_dsm/)** integration provides the data:
+
+- **Reboot** and **Shutdown** are native button entities → use them for `restart` and `shutdown`.
+- **Volume** used / total / % and per-physical-**disk** status + temperature are native sensors.
+- **Uptime** is a native sensor — but it's **disabled by default**, so enable it (and the **Volume Total size** sensor, also disabled by default, if you want "used / total" bars) under the integration's entities.
+- **Powering the NAS on** isn't possible through the integration (the box is off), so `turn_on` uses **Wake-on-LAN**, exactly like a PC. `status_entity` stays a ping `binary_sensor`.
 
 ```yaml
 type: custom:pc-control-card
 variant: feature
 name: NAS
-status_entity: binary_sensor.nas_status
-turn_on:  switch.nas_wol
-shutdown: button.nas_shutdown
-show_sleep: false        # most NAS firmware doesn't expose sleep
-show_gpu: false          # no GPU on a NAS
+icon: nas                                  # drive-bay header icon
+status_entity: binary_sensor.nas_ping      # `on` = reachable (ping)
+uptime_entity: sensor.nas_uptime           # enable this entity in the Synology integration
+turn_on:  switch.nas_wol                   # Wake-on-LAN switch
+restart:  button.nas_reboot                # native Synology DSM button
+shutdown: button.nas_shutdown              # native Synology DSM button
+show_sleep: false                          # most NAS firmware doesn't sleep
+show_restart: true                         # off by default — turn it on for a NAS
+show_gpu_usage: false                      # no GPU on a NAS
+confirm_restart: true
+confirm_shutdown: true
 metrics:
-  cpu: sensor.nas_cpu_percent
-  ram: sensor.nas_ram_used
-  ram_total: sensor.nas_ram_total       # display "X / Y GB"
-  storages:
-    - entity: sensor.nas_volume1_used
-      total: sensor.nas_volume1_total
+  cpu_usage: sensor.nas_cpu_utilization_total
+  ram_usage: sensor.nas_memory_usage_real
+  storages:                                # one bar per volume
+    - entity: sensor.nas_volume_1_used_space
+      total:  sensor.nas_volume_1_total_size   # enable Total size in the integration
       name: Volume 1
-    - entity: sensor.nas_volume2_used
-      total: sensor.nas_volume2_total
+    - entity: sensor.nas_volume_2_used_space
+      total:  sensor.nas_volume_2_total_size
       name: Volume 2
-    - entity: sensor.nas_volume3_used
-      total: sensor.nas_volume3_total
-      name: Volume 3
+drives:                                    # one row per physical disk (health + temp)
+  - status: sensor.nas_drive_1_status
+    temp:   sensor.nas_drive_1_temperature
+    name: Drive 1
+  - status: sensor.nas_drive_2_status
+    temp:   sensor.nas_drive_2_temperature
+    name: Drive 2
 ```
+
+> Entity IDs above follow the Synology DSM integration's naming — confirm yours in **Developer Tools → States**. Drive health shows a green dot when the status sensor reads one of `healthy_states` (default `normal`, `ok`, `healthy`, `good`) and red otherwise. In the chip variant, drives collapse to a `healthy/total` summary that turns red if any drive is unhealthy.
 
 ---
 
@@ -163,16 +179,24 @@ metrics:
 | `status_entity`    | **yes**  | entity_id                         | —                        | A `binary_sensor` that reports `on` when the PC is reachable (ping / WOL / agent heartbeat / etc.) |
 | `turn_on`          | no       | entity_id or `{entity, service}`  | —                        | Bare entity infers the service: `switch.*` → `switch.turn_on`, `button.*` → `button.press`, `script.*` → `script.turn_on`, `input_button.*` → `input_button.press`, `automation.*` → `automation.trigger` |
 | `sleep`            | no       | same                              | —                        | Same |
+| `restart`          | no       | same                              | —                        | Restart/reboot action (e.g. `button.nas_reboot`). Hidden unless `show_restart: true`. |
+| `uptime_entity`    | no       | sensor entity                     | —                        | When set, uptime is read from this sensor (timestamp or numeric duration) instead of `status_entity`'s `last_changed`. |
 | `shutdown`         | no       | same                              | —                        | Same |
 | `confirm_shutdown` | no       | boolean                           | `true`                   | When true, shutdown requires a 2-tap confirm. Set `false` to fire on a single tap. |
 | `confirm_sleep`    | no       | boolean                           | `false`                  | Set `true` to require 2-tap confirm on sleep too. |
+| `confirm_restart`  | no       | boolean                           | `true`                   | 2-tap confirm for Restart (reboot interrupts service). |
+| `show_restart`     | no       | boolean                           | `false`                  | Show the Restart button. Off by default; enable for a NAS. |
 | `show_turn_on`     | no       | boolean                           | `true`                   | Set `false` to hide the Turn on button. Remaining buttons grow to fill the row. |
 | `show_sleep`       | no       | boolean                           | `true`                   | Set `false` to hide the Sleep button. |
 | `show_shutdown`    | no       | boolean                           | `true`                   | Set `false` to hide the Shut down button. |
 | `show_cpu`         | no       | boolean                           | `true`                   | Show the CPU metric (chip + feature). |
 | `show_ram`         | no       | boolean                           | `true`                   | Show the RAM metric. |
 | `show_gpu`         | no       | boolean                           | `true`                   | Show the GPU metric. Set `false` for NAS use. |
-| `show_storage`     | no       | boolean                           | `true`                   | Show all disk rows. |
+| `show_storage`     | no       | boolean                           | `true`                   | Show all volume usage rows. |
+| `show_drives`      | no       | boolean                           | `true`                   | Show the per-drive health rows (feature) / summary (chip). Only renders when `drives` is set. |
+| `icon`             | no       | `pc` \| `nas`                     | `pc`                     | Header glyph. `nas` shows stacked drive bays. |
+| `healthy_states`   | no       | string[]                          | `[normal, ok, healthy, good]` | Status values (case-insensitive) treated as a healthy drive. |
+| `drives`           | no       | array of `{ status, temp?, name? }` | —                      | One entry per physical disk. `status` is the text status sensor; `temp` an optional °C sensor; `name` the row label (default `Drive`, `Drive 2`, …). |
 | `accent_color`     | no       | CSS color string                  | HA's `--primary-color`   | Override the accent for this card only (e.g. `"#7a5af8"`, `"#2f9e6e"`, `"oklch(0.65 0.18 145)"`). Different PCs can have different accents without touching your theme. |
 | `metrics.cpu`      | no       | sensor entity                     | —                        | Feature: drives CPU bar. Chip: mini stat. |
 | `metrics.ram`      | no       | sensor entity                     | —                        | Used value. Pair with `metrics.ram_total` for "used / total" display, otherwise treated as percent. |
@@ -268,6 +292,7 @@ card_mod:
 - **Status sensor** — a `binary_sensor.ping` of the PC's LAN IP works great.
 - **Turn on** — Wake-on-LAN (`wake_on_lan` integration → `switch` entity) or a script.
 - **Sleep / shutdown** — an agent running on the PC that exposes buttons in HA. [HASS.Agent](https://github.com/LAB02-Research/HASS.Agent), [IOT Link](https://gitlab.com/iotlink/iotlink), or any MQTT-based shell command works.
+- **Synology NAS** — the built-in [Synology DSM](https://www.home-assistant.io/integrations/synology_dsm/) integration provides CPU/RAM/temperature, per-volume usage, per-drive status/temperature, uptime, and native Reboot/Shutdown buttons — no agent required. Pair with Wake-on-LAN for power-on.
 - **Metrics** — same agents typically expose CPU / RAM / GPU as sensors.
 
 ---
