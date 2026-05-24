@@ -87,7 +87,7 @@ function migrateConfig(raw) {
 // full { entity, service: 'domain.action' } object.
 // Returns { entity, domain, service } where `service` is the action
 // name ("turn_on", "press", …) ready for callService(domain, service).
-function parseAction(raw) {
+export function parseAction(raw) {
   if (!raw) return null;
   if (typeof raw === 'string') {
     const [domain] = raw.split('.');
@@ -118,6 +118,28 @@ function fmtUptime(ms) {
   if (d > 0) return `${d}d ${h}h ${m}m`;
   if (h > 0) return `${h}h ${m}m`;
   return `${m}m`;
+}
+
+// Compute uptime in milliseconds from an uptime/last-boot entity, or null.
+// Handles a timestamp sensor (device_class 'timestamp' or any ISO-parseable
+// state) and a numeric duration sensor (unit-aware: d/h/min, default seconds).
+// `Number(raw)` — not parseFloat — is used so date strings like "2024-01-01"
+// (which parseFloat would read as 2024) fall through to date parsing.
+export function uptimeMsFromEntity(ent, now = Date.now()) {
+  if (!ent || ent.state == null) return null;
+  const raw = String(ent.state);
+  const num = Number(raw);
+  if (ent.attributes?.device_class === 'timestamp' || !Number.isFinite(num)) {
+    const t = new Date(raw).getTime();
+    return Number.isFinite(t) ? now - t : null;
+  }
+  const unit = (ent.attributes?.unit_of_measurement || '').toLowerCase();
+  const mult =
+    /^(d|day|days)$/.test(unit)            ? 86_400_000 :
+    /^(h|hr|hrs|hour|hours)$/.test(unit)   ? 3_600_000  :
+    /^(min|m|minute|minutes)$/.test(unit)  ? 60_000     :
+    1000;
+  return num * mult;
 }
 
 // Format a number for the value label. Single decimal under 10, no
