@@ -1,7 +1,7 @@
 import './jsdom-setup.js';
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { uptimeMsFromEntity, parseAction } from '../pc-control-card.js';
+import { uptimeMsFromEntity, parseAction, driveHealthy, DEFAULT_HEALTHY } from '../pc-control-card.js';
 
 test('uptimeMsFromEntity: timestamp device_class', () => {
   const now = Date.UTC(2024, 0, 1, 12, 0, 0);
@@ -34,4 +34,17 @@ test('parseAction infers button.press for a reboot button', () => {
   assert.deepEqual(parseAction('button.nas_reboot'), {
     entity: 'button.nas_reboot', domain: 'button', service: 'press',
   });
+});
+
+test('DEFAULT_HEALTHY contains the common healthy states', () => {
+  assert.deepEqual(DEFAULT_HEALTHY, ['normal', 'ok', 'healthy', 'good']);
+});
+
+test('driveHealthy: case-insensitive membership', () => {
+  assert.equal(driveHealthy('normal', DEFAULT_HEALTHY), true);
+  assert.equal(driveHealthy('Normal', DEFAULT_HEALTHY), true);
+  assert.equal(driveHealthy(' OK ', DEFAULT_HEALTHY), true);
+  assert.equal(driveHealthy('crashed', DEFAULT_HEALTHY), false);
+  assert.equal(driveHealthy(undefined, DEFAULT_HEALTHY), false);
+  assert.equal(driveHealthy('healthy', ['normal']), false);
 });

@@ -151,6 +151,18 @@ function fmtNum(n) {
   return n.toFixed(2);
 }
 
+// Default set of drive/volume status states treated as healthy. Synology
+// reports "normal" for healthy disks and volumes. Overridable per card via
+// the `healthy_states` config key.
+export const DEFAULT_HEALTHY = ['normal', 'ok', 'healthy', 'good'];
+
+// True when a status state string is considered healthy. `healthyStates`
+// must already be lowercased by the caller.
+export function driveHealthy(state, healthyStates) {
+  if (state == null) return false;
+  return healthyStates.includes(String(state).trim().toLowerCase());
+}
+
 // ── Styles ──────────────────────────────────────────────────────────
 // Named STYLES (not CSS) to avoid shadowing the global `CSS` object.
 
