@@ -20,7 +20,7 @@
  *        --error-color. Light & dark themes Just Work.
  */
 
-const CARD_VERSION = '1.2.0';
+const CARD_VERSION = '1.3.0';
 
 // ── State machine ───────────────────────────────────────────────────
 //   off / on are derived from the binary_sensor.
@@ -543,6 +543,17 @@ const STYLES = `
   font-family: ui-monospace, "SF Mono", Menlo, monospace;
   font-variant-numeric: tabular-nums;
 }
+/* Drive groups: a drive header + its nested volume bars. A thin inset
+   separator divides consecutive groups — it sits within the metrics'
+   side padding so it's narrower than the full-width action-footer
+   divider and the two read as different things. */
+.feature .drive-group { display: flex; flex-direction: column; gap: 8px; }
+.feature .metrics.has-drive-volumes .drive-group + .drive-group {
+  border-top: 1px solid var(--spc-border);
+  margin-top: 4px;
+  padding-top: 14px;
+}
+.feature .drive-group .metric.nested { padding-left: 16px; }
 .chip .mini-stat .mval.bad { color: var(--spc-alert); }
 `;
 
@@ -726,33 +737,26 @@ export class PcControlCard extends HTMLElementBase {
   _normalizeStorages() {
     const m = this._config.metrics || {};
     if (Array.isArray(m.storages)) {
-      return m.storages
-        .filter((s) => s && s.entity)
-        .map((s, i) => ({
-          entity: s.entity,
-          attribute: s.attribute || null,
-          total: s.total || null,
-          totalAttribute: s.total_attribute || null,
-          unit: s.unit || null,
-          name: s.name || (i === 0 ? 'Disk' : `Disk ${i + 1}`),
-        }));
+      return m.storages.filter((s) => s && s.entity).map((s, i) => normalizeStorageItem(s, i, 'Disk'));
     }
     if (m.storage) {
-      return [{
+      return [normalizeStorageItem({
         entity: m.storage,
-        attribute: m.storage_attribute || null,
-        total: m.storage_total || null,
-        totalAttribute: m.storage_total_attribute || null,
-        unit: m.storage_unit || null,
-        name: m.storage_name || 'Disk',
-      }];
+        attribute: m.storage_attribute,
+        total: m.storage_total,
+        total_attribute: m.storage_total_attribute,
+        unit: m.storage_unit,
+        name: m.storage_name,
+      }, 0, 'Disk')];
     }
     return [];
   }
 
   // Normalize the optional top-level `drives` array into clean
-  // { status, temp, name } records — one per physical disk. Mirrors
-  // _normalizeStorages; entries without a `status` sensor are dropped.
+  // { status, temp, name, volumes } records — one per physical disk. A
+  // drive may carry nested `volumes` (same shape as metrics.storages);
+  // when present they render grouped under the drive in the feature card.
+  // Entries without a `status` sensor are dropped.
   _normalizeDrives() {
     const d = this._config.drives;
     if (!Array.isArray(d)) return [];
@@ -762,6 +766,9 @@ export class PcControlCard extends HTMLElementBase {
         status: x.status,
         temp: x.temp || null,
         name: x.name || (i === 0 ? 'Drive' : `Drive ${i + 1}`),
+        volumes: Array.isArray(x.volumes)
+          ? x.volumes.filter((v) => v && v.entity).map((v, j) => normalizeStorageItem(v, j, 'Volume'))
+          : [],
       }));
   }
 
@@ -800,6 +807,17 @@ export class PcControlCard extends HTMLElementBase {
       totalAttribute = s.totalAttribute;
       unit           = s.unit;
       autoDetect     = !s.attribute; // only fall back when no explicit attribute
+    } else if (key.startsWith('dvol_')) {
+      // dvol_<driveIdx>_<volumeIdx> — a volume nested under a drive.
+      const [, di, vi] = key.split('_');
+      const v = this._drives?.[+di]?.volumes?.[+vi];
+      if (!v) return null;
+      entityId       = v.entity;
+      totalId        = v.total;
+      attribute      = v.attribute;
+      totalAttribute = v.totalAttribute;
+      unit           = v.unit;
+      autoDetect     = !v.attribute;
     } else if (key === 'ram_usage') {
       entityId = m.ram_usage;
       totalId  = m.ram_usage_total;
@@ -1036,12 +1054,13 @@ export class PcControlCard extends HTMLElementBase {
         }
       });
 
-      // Per-drive health rows (status dot + temperature).
+      // Per-drive groups: health header + (optional) nested volume bars.
       (this._drives || []).forEach((d, i) => {
         const row = root.querySelector(`.drive[data-key="drive_${i}"]`);
         if (!row) return;
         const enabled = this._config.show_drives !== false;
-        row.style.display = enabled ? '' : 'none';
+        const group = root.querySelector(`.drive-group[data-drive="${i}"]`);
+        (group || row).style.display = enabled ? '' : 'none';
         if (!enabled) return;
         const dot = row.querySelector('.ddot');
         const valEl = row.querySelector('.dval');
@@ -1054,6 +1073,21 @@ export class PcControlCard extends HTMLElementBase {
           dot.classList.remove('ok', 'bad');
           valEl.textContent = '—';
         }
+        // Nested volume usage bars (rendered like storage bars).
+        (d.volumes || []).forEach((v, j) => {
+          const vrow = root.querySelector(`.metric[data-key="dvol_${i}_${j}"]`);
+          if (!vrow) return;
+          const mv = isOn ? this._metricValue(`dvol_${i}_${j}`) : null;
+          const valE = vrow.querySelector('.mval');
+          const fillE = vrow.querySelector('.fill');
+          if (isOn && mv) {
+            valE.textContent = mv.displayValue;
+            fillE.style.width = mv.barPct != null ? `${mv.barPct}%` : '0%';
+          } else {
+            valE.textContent = '—';
+            fillE.style.width = '0%';
+          }
+        });
       });
     }
 
@@ -1262,10 +1296,10 @@ const TEMPLATES = {
         </div>
       </div>
 
-      <div class="metrics">
+      <div class="metrics${drives.some((d) => d.volumes && d.volumes.length) ? ' has-drive-volumes' : ''}">
         ${METRIC_KEYS.map((k) => metricRow(k, METRIC_LABELS[k])).join('')}
         ${storages.map((s, i) => metricRow(`storage_${i}`, escapeHtml(s.name).toUpperCase())).join('')}
-        ${drives.map((d, i) => driveRow(`drive_${i}`, escapeHtml(d.name).toUpperCase())).join('')}
+        ${drives.map((d, i) => driveGroup(d, i)).join('')}
       </div>
 
       <div class="actions">
@@ -1278,9 +1312,22 @@ const TEMPLATES = {
   `,
 };
 
-function metricRow(key, label) {
+// Normalize one storage/volume config record into the shape _metricValue
+// expects. Shared by metrics.storages and drives[].volumes.
+function normalizeStorageItem(s, i, base) {
+  return {
+    entity: s.entity,
+    attribute: s.attribute || null,
+    total: s.total || null,
+    totalAttribute: s.total_attribute || null,
+    unit: s.unit || null,
+    name: s.name || (i === 0 ? base : `${base} ${i + 1}`),
+  };
+}
+
+function metricRow(key, label, nested) {
   return `
-    <div class="metric" data-key="${key}">
+    <div class="metric${nested ? ' nested' : ''}" data-key="${key}">
       <div class="metric-head">
         <span class="mlabel">${label}</span>
         <span class="mval">—</span>
@@ -1298,6 +1345,16 @@ function driveRow(key, label) {
       <span class="dval">—</span>
     </div>
   `;
+}
+
+// A drive rendered as a group: its health header row, then any nested
+// volume usage bars beneath it. Used by the feature variant.
+function driveGroup(d, i) {
+  const header = driveRow(`drive_${i}`, escapeHtml(d.name).toUpperCase());
+  const vols = (d.volumes || [])
+    .map((v, j) => metricRow(`dvol_${i}_${j}`, escapeHtml(v.name).toUpperCase(), true))
+    .join('');
+  return `<div class="drive-group" data-drive="${i}">${header}${vols}</div>`;
 }
 
 function escapeHtml(s) {
@@ -1596,6 +1653,11 @@ class PcControlCardEditor extends HTMLElementBase {
         const item = { status };
         if (next[`_drive_${i}_temp`]) item.temp = next[`_drive_${i}_temp`];
         if (next[`_drive_${i}_name`]) item.name = next[`_drive_${i}_name`];
+        // The form has no fields for nested volumes; preserve any from the
+        // current config (matched by slot↔drive index) so editing in the
+        // UI doesn't strip a grouped Drive→Volumes layout.
+        const prevVolumes = this._config?.drives?.[i - 1]?.volumes;
+        if (Array.isArray(prevVolumes) && prevVolumes.length) item.volumes = prevVolumes;
         drives.push(item);
       }
       delete next[`_drive_${i}_status`];
