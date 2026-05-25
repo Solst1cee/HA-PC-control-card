@@ -79,9 +79,9 @@ shutdown: button.YOUR_PC_SHUTDOWN
 confirm_shutdown: true
 confirm_sleep: false
 metrics:
-  cpu: sensor.YOUR_PC_CPU_PERCENT  # optional — shown inline next to the status
-  ram: sensor.YOUR_PC_RAM_PERCENT  # optional
-  gpu: sensor.YOUR_PC_GPU_LOAD     # optional
+  cpu_usage: sensor.YOUR_PC_CPU_PERCENT  # optional — shown inline next to the status
+  ram_usage: sensor.YOUR_PC_RAM_PERCENT  # optional
+  gpu_usage: sensor.YOUR_PC_GPU_LOAD     # optional
   storages:                         # optional — first disk shown inline on chip
     - entity: sensor.YOUR_DISK_PERCENT
       name: System
@@ -100,17 +100,21 @@ shutdown: button.YOUR_PC_SHUTDOWN
 confirm_shutdown: true
 confirm_sleep: false
 
-# Hide any individual metric. Useful for NAS (no GPU): show_gpu: false
-show_cpu: true
-show_ram: true
-show_gpu: true
-show_storage: true
+# Hide any individual metric. Useful for NAS (no GPU): show_gpu_usage: false
+show_cpu_usage: true
+show_cpu_temp:  false   # CPU temperature bar (set true to show)
+show_gpu_usage: true
+show_gpu_temp:  false   # GPU temperature bar (set true to show)
+show_ram_usage: true
+show_storage:   true
 
 metrics:
-  cpu: sensor.YOUR_PC_CPU_PERCENT          # numeric % sensor
-  ram: sensor.YOUR_PC_RAM_PERCENT          # used % — or used "GB" sensor if pairing with ram_total
-  ram_total: sensor.YOUR_PC_RAM_TOTAL      # OPTIONAL: if set, RAM displays "used / total"
-  gpu: sensor.YOUR_PC_GPU_LOAD
+  cpu_usage: sensor.YOUR_PC_CPU_PERCENT       # numeric % sensor
+  cpu_temp:  sensor.YOUR_PC_CPU_TEMP          # optional °C — needs show_cpu_temp: true
+  ram_usage: sensor.YOUR_PC_RAM_PERCENT       # used % — or used "GB" sensor if pairing with ram_usage_total
+  ram_usage_total: sensor.YOUR_PC_RAM_TOTAL   # OPTIONAL: if set, RAM displays "used / total"
+  gpu_usage: sensor.YOUR_PC_GPU_LOAD
+  gpu_temp:  sensor.YOUR_PC_GPU_TEMP          # optional °C — needs show_gpu_temp: true
   storages:                                 # one entry per disk — supports any number
     - entity: sensor.YOUR_DISK_1_USED       # sensor (used) — numeric, units come from the sensor
       total: sensor.YOUR_DISK_1_TOTAL       # OPTIONAL: if set, displays "used / total"
@@ -144,12 +148,12 @@ restart:  button.nas_reboot                # native Synology DSM button
 shutdown: button.nas_shutdown              # native Synology DSM button
 show_sleep: false                          # most NAS firmware doesn't sleep
 show_restart: true                         # off by default — turn it on for a NAS
-show_gpu: false                            # no GPU on a NAS
+show_gpu_usage: false                      # no GPU on a NAS
 confirm_restart: true
 confirm_shutdown: true
 metrics:
-  cpu: sensor.nas_cpu_utilization_total
-  ram: sensor.nas_memory_usage_real
+  cpu_usage: sensor.nas_cpu_utilization_total
+  ram_usage: sensor.nas_memory_usage_real
   storages:                                # one bar per volume
     - entity: sensor.nas_volume_1_used_space
       total:  sensor.nas_volume_1_total_size   # enable Total size in the integration
@@ -233,20 +237,26 @@ filled. For an absolute **used / total** readout, pair the MB attributes and add
 | `show_turn_on`     | no       | boolean                           | `true`                   | Set `false` to hide the Turn on button. Remaining buttons grow to fill the row. |
 | `show_sleep`       | no       | boolean                           | `true`                   | Set `false` to hide the Sleep button. |
 | `show_shutdown`    | no       | boolean                           | `true`                   | Set `false` to hide the Shut down button. |
-| `show_cpu`         | no       | boolean                           | `true`                   | Show the CPU metric (chip + feature). |
-| `show_ram`         | no       | boolean                           | `true`                   | Show the RAM metric. |
-| `show_gpu`         | no       | boolean                           | `true`                   | Show the GPU metric. Set `false` for NAS use. |
+| `show_cpu_usage`   | no       | boolean                           | `true`                   | Show the CPU usage metric (chip + feature). |
+| `show_cpu_temp`    | no       | boolean                           | `false`                  | Show the CPU temperature metric. |
+| `show_gpu_usage`   | no       | boolean                           | `true`                   | Show the GPU usage metric. Set `false` for NAS use. |
+| `show_gpu_temp`    | no       | boolean                           | `false`                  | Show the GPU temperature metric. |
+| `show_ram_usage`   | no       | boolean                           | `true`                   | Show the RAM metric. |
 | `show_storage`     | no       | boolean                           | `true`                   | Show all volume usage rows. |
 | `show_drives`      | no       | boolean                           | `true`                   | Show the per-drive health rows (feature) / summary (chip). Only renders when `drives` is set. |
 | `icon`             | no       | `pc` \| `nas`                     | `pc`                     | Header glyph. `nas` shows stacked drive bays. |
 | `healthy_states`   | no       | string[]                          | `[normal, ok, healthy, good]` | Status values (case-insensitive) treated as a healthy drive. |
 | `drives`           | no       | array of `{ status, temp?, name? }` | —                      | One entry per physical disk. `status` is the text status sensor; `temp` an optional °C sensor; `name` the row label (default `Drive`, `Drive 2`, …). |
 | `accent_color`     | no       | CSS color string                  | HA's `--primary-color`   | Override the accent for this card only (e.g. `"#7a5af8"`, `"#2f9e6e"`, `"oklch(0.65 0.18 145)"`). Different PCs can have different accents without touching your theme. |
-| `metrics.cpu`      | no       | sensor entity                     | —                        | Feature: drives CPU bar. Chip: mini stat. |
-| `metrics.ram`      | no       | sensor entity                     | —                        | Used value. Pair with `metrics.ram_total` for "used / total" display, otherwise treated as percent. |
-| `metrics.ram_total`| no       | sensor entity                     | —                        | When present, RAM switches from percent to absolute display (e.g. `6.8 / 16 GB`). |
-| `metrics.gpu`      | no       | sensor entity                     | —                        | GPU load or temperature — unit follows the sensor. |
+| `metrics.cpu_usage`      | no | sensor entity                     | —                        | Feature: drives the CPU usage bar. Chip: mini stat. |
+| `metrics.cpu_temp`       | no | sensor entity                     | —                        | CPU temperature (°C). Shown when `show_cpu_temp: true`. |
+| `metrics.gpu_usage`      | no | sensor entity                     | —                        | GPU load / usage — unit follows the sensor. |
+| `metrics.gpu_temp`       | no | sensor entity                     | —                        | GPU temperature (°C). Shown when `show_gpu_temp: true`. |
+| `metrics.ram_usage`      | no | sensor entity                     | —                        | Used value. Pair with `metrics.ram_usage_total` for "used / total" display, otherwise treated as percent. |
+| `metrics.ram_usage_total`| no | sensor entity                     | —                        | When present, RAM switches from percent to absolute display (e.g. `6.8 / 16 GB`). |
 | `metrics.storages` | no       | array of `{ entity, attribute?, total?, total_attribute?, unit?, name? }` | — | One entry per disk. `entity` is required (used or percent sensor). `attribute` reads the value from an entity *attribute* instead of its state. `total` (a separate entity) or `total_attribute` (an attribute on the same entity) switches to "used / total" display. `unit` (e.g. `MB`) declares the unit the raw value is *already in* (its source unit, **not** the display unit) and auto-scales the display up to GB/TB. `name` is the label shown in the feature variant (defaults to `Disk`, `Disk 2`, …). Supports any number of disks. See [HASS.Agent storage](#hassagent-storage). |
+
+> **Deprecated aliases:** earlier versions used `show_cpu` / `show_ram` / `show_gpu` and `metrics.cpu` / `metrics.ram` / `metrics.ram_total` / `metrics.gpu`. The card still accepts them — it migrates them to the namespaced keys above automatically — but new configs should use the canonical names.
 
 If you need a specific service (e.g. `switch.toggle` instead of `switch.turn_on`):
 
