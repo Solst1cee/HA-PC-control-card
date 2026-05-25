@@ -277,7 +277,7 @@
         <button data-metric="gpu_usage" class="active">GPU</button>
         <button data-metric="gpu_temp">GPU°</button>
         <button data-metric="ram_usage" class="active">RAM</button>
-        <button data-metric="storage">Disk</button>
+        <button data-metric="storage" class="active">Disk</button>
       </div>
 
       <span class="ctrl-label" style="margin-left: 12px;">RAM</span>
@@ -455,7 +455,7 @@
       gpu_usage: true,
       gpu_temp:  false,
       ram_usage: true,
-      storage:   false,
+      storage:   true,
     },
     ramUnits:  'percent',  // 'percent' | 'absolute' (RAM display)
     diskUnits: 'percent',  // 'percent' | 'absolute' (Disk display, independent)
@@ -563,21 +563,28 @@
     ] : [
       '  ram_usage: sensor.YOUR_PC_RAM_PERCENT',
     ];
-    const storageLines = diskAbs ? [
+    // Storage block only appears when the Disk metric is on, and its shape
+    // tracks the Disk %/GB toggle — so the snippet stays a faithful,
+    // copy-paste-ready reflection of what the demo is showing.
+    const hassAgentNote =
+      '    # HASS.Agent disk? Read its attributes instead — see "HASS.Agent storage" in the README.';
+    const storageLines = !metricVis.storage ? [] : (diskAbs ? [
       '  storages:',
-      '    - entity: sensor.YOUR_DISK_1_USED   # used (GB / TB)',
-      '      total: sensor.YOUR_DISK_1_TOTAL    # total → "used / total" display',
-      '      name: System                       # optional label',
+      '    - entity: sensor.YOUR_DISK_1_USED      # numeric "used" amount…',
+      '      total: sensor.YOUR_DISK_1_TOTAL      # …plus total → "340 / 500 GB" display',
+      '      name: System                         # optional label',
       '    - entity: sensor.YOUR_DISK_2_USED',
       '      total: sensor.YOUR_DISK_2_TOTAL',
       '      name: Media',
+      hassAgentNote,
     ] : [
       '  storages:',
-      '    - entity: sensor.YOUR_DISK_1_PERCENT  # no total → percent display',
+      '    - entity: sensor.YOUR_DISK_1_PERCENT   # a % sensor → percent bar',
       '      name: System',
       '    - entity: sensor.YOUR_DISK_2_PERCENT',
       '      name: Media',
-    ];
+      hassAgentNote,
+    ]);
 
     const yaml = [
       'type: custom:pc-control-card',
@@ -606,15 +613,6 @@
       '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
       ...ramLines,
       ...storageLines,
-      '  # HASS.Agent disk? Its state is the drive label and the sizes live in',
-      '  # attributes, so read them directly — no helper sensors needed:',
-      '  #   - entity: sensor.YOUR_PC_storage_c',
-      '  #     attribute: UsedSpaceMB        # value comes from this attribute',
-      '  #     total_attribute: TotalSizeMB  # total from an attribute on the same entity',
-      '  #     unit: MB                       # the unit the values are ALREADY in (not the',
-      '  #                                    # display unit) — card auto-scales to GB/TB',
-      '  #     name: "C:"',
-      '  # (Omit attribute/total_attribute for a simple % — state auto-detects UsedSpacePercentage.)',
     ].join('\n');
 
     document.getElementById('yaml-snippet').textContent = yaml;
