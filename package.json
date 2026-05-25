@@ -1,12 +1,12 @@
 {
   "name": "pc-control-card",
-  "version": "1.1.0",
+  "version": "1.2.0",
   "description": "A Lovelace custom card for controlling a PC from Home Assistant — turn on, sleep, shutdown, with live CPU/RAM/GPU metrics.",
   "type": "module",
   "main": "pc-control-card.js",
   "files": ["pc-control-card.js"],
   "scripts": {
-    "test": "node --test"
+    "test": "node --test test/*.test.js"
   },
   "repository": {
     "type": "git",
@@ -27,5 +27,8 @@
   "bugs": {
     "url": "https://github.com/Solst1cee/HA-PC-control-card/issues"
   },
-  "homepage": "https://github.com/Solst1cee/HA-PC-control-card#readme"
+  "homepage": "https://github.com/Solst1cee/HA-PC-control-card#readme",
+  "devDependencies": {
+    "jsdom": "^29.1.1"
+  }
 }
