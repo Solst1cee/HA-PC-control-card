@@ -20,7 +20,7 @@
  *        --error-color. Light & dark themes Just Work.
  */
 
-const CARD_VERSION = '1.3.0';
+const CARD_VERSION = '1.3.1';
 
 // ── State machine ───────────────────────────────────────────────────
 //   off / on are derived from the binary_sensor.
@@ -548,10 +548,20 @@ const STYLES = `
    side padding so it's narrower than the full-width action-footer
    divider and the two read as different things. */
 .feature .drive-group { display: flex; flex-direction: column; gap: 8px; }
+/* Separator between drive groups — drawn as an inset line (16px of
+   breathing room each side) via ::before, so it reads as a group divider
+   and is clearly distinct from the full-width action-footer border. */
 .feature .metrics.has-drive-volumes .drive-group + .drive-group {
-  border-top: 1px solid var(--spc-border);
-  margin-top: 4px;
+  margin-top: 14px;
   padding-top: 14px;
+  position: relative;
+}
+.feature .metrics.has-drive-volumes .drive-group + .drive-group::before {
+  content: "";
+  position: absolute;
+  top: 0; left: 16px; right: 16px;
+  height: 1px;
+  background: var(--spc-border);
 }
 .feature .drive-group .metric.nested { padding-left: 16px; }
 .chip .mini-stat .mval.bad { color: var(--spc-alert); }
