@@ -168,6 +168,50 @@ drives:                                    # one row per physical disk (health +
 
 > Entity IDs above follow the Synology DSM integration's naming — confirm yours in **Developer Tools → States**. Drive health shows a green dot when the status sensor reads one of `healthy_states` (default `normal`, `ok`, `healthy`, `good`) and red otherwise. In the chip variant, drives collapse to a `healthy/total` summary that turns red if any drive is unhealthy.
 
+### HASS.Agent storage
+
+[HASS.Agent](https://github.com/LAB02-Research/HASS.Agent)'s **Storage** sensor is a
+*multi-value* sensor: it creates one entity per drive (e.g. `sensor.<pc>_storage_c`)
+whose **state is the volume label** (a string like `Windows`), while the usable
+numbers live in **attributes** — `UsedSpacePercentage`, `TotalSizeMB`, `UsedSpaceMB`, …
+
+So pointing a disk straight at that entity would show nothing (the state isn't a
+number). The card handles this two ways:
+
+```yaml
+metrics:
+  storages:
+    # Zero-config: a non-numeric state auto-detects `UsedSpacePercentage`.
+    - entity: sensor.my_pc_storage_c
+      name: "C:"
+
+    # Or name the attribute explicitly (works for any attribute-based sensor):
+    - entity: sensor.my_pc_storage_d
+      attribute: UsedSpacePercentage
+      name: "D:"
+```
+
+`UsedSpacePercentage` is the cleanest choice — it renders as `42%` with the bar
+filled. For an absolute **used / total** readout, pair the MB attributes and add
+`unit: MB` — the card auto-scales to GB/TB so you don't need any helper sensors:
+
+```yaml
+    - entity: sensor.my_pc_storage_c
+      attribute: UsedSpaceMB
+      total_attribute: TotalSizeMB
+      unit: MB                # → renders e.g. "465 / 931 GB", scaling to TB as needed
+      name: "C:"
+```
+
+> **What `unit` means:** it's the unit your sensor's values are **already in** (their
+> *source* unit) — **not** the unit you want shown. HASS.Agent's `UsedSpaceMB` /
+> `TotalSizeMB` are always megabytes, so it's always `unit: MB`. The card then
+> **auto-picks** the display magnitude up the `B → KB → MB → GB → TB` ladder (a 488 GB
+> disk shows GB; a 4 TB volume shows TB), keeping used and total in the same unit.
+> So `unit: GB` here would be wrong — it'd tell the card those megabyte numbers are
+> gigabytes and over-scale them to TB. Omit `unit` entirely and the raw numbers show
+> as-is; scaling only happens when `unit` is set, so existing cards are unaffected.
+
 ---
 
 ## Configuration
@@ -202,7 +246,7 @@ drives:                                    # one row per physical disk (health +
 | `metrics.ram`      | no       | sensor entity                     | —                        | Used value. Pair with `metrics.ram_total` for "used / total" display, otherwise treated as percent. |
 | `metrics.ram_total`| no       | sensor entity                     | —                        | When present, RAM switches from percent to absolute display (e.g. `6.8 / 16 GB`). |
 | `metrics.gpu`      | no       | sensor entity                     | —                        | GPU load or temperature — unit follows the sensor. |
-| `metrics.storages` | no       | array of `{ entity, total?, name? }` | —                     | One entry per disk. `entity` is required (used or percent sensor). `total` is optional — if present, displays "used / total". `name` is the label shown in the feature variant (defaults to `Disk`, `Disk 2`, …). Supports any number of disks. |
+| `metrics.storages` | no       | array of `{ entity, attribute?, total?, total_attribute?, unit?, name? }` | — | One entry per disk. `entity` is required (used or percent sensor). `attribute` reads the value from an entity *attribute* instead of its state. `total` (a separate entity) or `total_attribute` (an attribute on the same entity) switches to "used / total" display. `unit` (e.g. `MB`) declares the unit the raw value is *already in* (its source unit, **not** the display unit) and auto-scales the display up to GB/TB. `name` is the label shown in the feature variant (defaults to `Disk`, `Disk 2`, …). Supports any number of disks. See [HASS.Agent storage](#hassagent-storage). |
 
 If you need a specific service (e.g. `switch.toggle` instead of `switch.turn_on`):
 

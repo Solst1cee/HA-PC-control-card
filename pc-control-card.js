@@ -20,7 +20,7 @@
  *        --error-color. Light & dark themes Just Work.
  */
 
-const CARD_VERSION = '1.1.0';
+const CARD_VERSION = '1.2.0';
 
 // ── State machine ───────────────────────────────────────────────────
 //   off / on are derived from the binary_sensor.
@@ -163,6 +163,89 @@ export const DEFAULT_HEALTHY = ['normal', 'ok', 'healthy', 'good'];
 export function driveHealthy(state, healthyStates) {
   if (state == null) return false;
   return healthyStates.includes(String(state).trim().toLowerCase());
+}
+
+// Scale a data-size value (and its total, kept in the same unit) up the
+// binary ladder so it reads naturally — e.g. 953674 MB → 931 GB. The target
+// unit is driven by the larger of value/total so both share it. An unknown
+// source unit passes through untouched.
+const DATA_UNITS = ['B', 'KB', 'MB', 'GB', 'TB', 'PB'];
+function scaleDataSize(value, total, unit) {
+  const base = DATA_UNITS.indexOf(unit);
+  if (base < 0) return { value, total, unit };
+  const ref = (Number.isFinite(total) && total > 0) ? total : value;
+  let steps = 0;
+  for (let r = ref; r >= 1024 && base + steps < DATA_UNITS.length - 1; r /= 1024) steps++;
+  const f = 1024 ** steps;
+  return {
+    value: value / f,
+    total: Number.isFinite(total) ? total / f : total,
+    unit: DATA_UNITS[base + steps],
+  };
+}
+
+// Pure value resolver + formatter. Given an entity's state object (and an
+// optional separate "total" entity), return both a display string and a
+// 0–100 bar percentage — or null when there's no usable number.
+//
+// The value is resolved in priority order:
+//   1. opts.attribute   → read from ent.attributes[attribute]
+//   2. ent.state        → when numeric
+//   3. opts.autoDetect  → HASS.Agent's UsedSpacePercentage attribute
+//                         (its state is the volume label, not a number)
+//
+// Display mode follows opts.totalConfigured (a total source was set) or
+// opts.unit (an explicit source unit, which forces absolute display):
+//   - finite total > 0 → absolute ("6.8 / 16 GB")
+//   - total unavailable → single value, no bar
+//   - neither          → percent ("42%")
+// The total itself comes from opts.totalAttribute (same entity) or, failing
+// that, the separate totalEnt's state. opts.unit (e.g. "MB") overrides the
+// entity's unit and auto-scales value+total up the data-size ladder.
+//
+// Exported so the parsing/formatting logic can be unit-tested without a DOM.
+export function computeMetricDisplay(ent, totalEnt, opts = {}) {
+  if (!ent) return null;
+  const { attribute = null, totalAttribute = null, totalConfigured = false, autoDetect = false, unit: unitOverride = null } = opts;
+
+  let value;
+  let unit = unitOverride || (ent.attributes?.unit_of_measurement ?? '');
+  if (attribute) {
+    value = parseFloat(ent.attributes?.[attribute]);
+  } else {
+    value = parseFloat(ent.state);
+    if (!Number.isFinite(value) && autoDetect) {
+      const auto = parseFloat(ent.attributes?.UsedSpacePercentage);
+      if (Number.isFinite(auto)) { value = auto; unit = ''; } // percentage — no unit suffix
+    }
+  }
+  if (!Number.isFinite(value)) return null;
+
+  let total = null;
+  if (totalAttribute) total = parseFloat(ent.attributes?.[totalAttribute]);
+  else if (totalEnt)  total = parseFloat(totalEnt.state);
+
+  // An explicit source unit auto-scales value + total to a readable magnitude.
+  if (unitOverride) ({ value, total, unit } = scaleDataSize(value, total, unit));
+
+  const space = unit ? ' ' : '';
+  if (totalConfigured || unitOverride) {
+    if (Number.isFinite(total) && total > 0) {
+      return {
+        displayValue: `${fmtNum(value)} / ${fmtNum(total)}${space}${unit}`,
+        compactValue: `${fmtNum(value)}${space}${unit}`,
+        barPct: Math.max(0, Math.min(100, (value / total) * 100)),
+      };
+    }
+    return {
+      displayValue: `${fmtNum(value)}${space}${unit}`,
+      compactValue: `${fmtNum(value)}${space}${unit}`,
+      barPct: null,
+    };
+  }
+
+  const pct = `${Math.round(value)}${unit || '%'}`;
+  return { displayValue: pct, compactValue: pct, barPct: Math.max(0, Math.min(100, value)) };
 }
 
 // ── Styles ──────────────────────────────────────────────────────────
@@ -476,7 +559,12 @@ const ICONS = {
 
 // ── The card ────────────────────────────────────────────────────────
 
-class PcControlCard extends HTMLElement {
+// In a browser this resolves to the real HTMLElement. Under Node (where
+// the module is imported for unit tests) there's no DOM, so fall back to a
+// bare base class — the custom-element machinery is never exercised there.
+const HTMLElementBase = typeof HTMLElement !== 'undefined' ? HTMLElement : class {};
+
+export class PcControlCard extends HTMLElementBase {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -629,8 +717,11 @@ class PcControlCard extends HTMLElement {
   }
 
   // Normalize the optional `metrics.storages` array (and the older
-  // singular `metrics.storage` + `metrics.storage_total` shorthand)
-  // into a clean array of { entity, total, name } records. One entry
+  // singular `metrics.storage` + `metrics.storage_total` shorthand) into a
+  // clean array of { entity, attribute, total, totalAttribute, name }
+  // records. `attribute` / `total_attribute` let the value (and total) come
+  // from an entity attribute instead of its state — needed for HASS.Agent's
+  // storage sensor, whose state is the volume label, not a number. One entry
   // per disk; supports any number for multi-disk NAS setups.
   _normalizeStorages() {
     const m = this._config.metrics || {};
@@ -639,14 +730,20 @@ class PcControlCard extends HTMLElement {
         .filter((s) => s && s.entity)
         .map((s, i) => ({
           entity: s.entity,
+          attribute: s.attribute || null,
           total: s.total || null,
+          totalAttribute: s.total_attribute || null,
+          unit: s.unit || null,
           name: s.name || (i === 0 ? 'Disk' : `Disk ${i + 1}`),
         }));
     }
     if (m.storage) {
       return [{
         entity: m.storage,
+        attribute: m.storage_attribute || null,
         total: m.storage_total || null,
+        totalAttribute: m.storage_total_attribute || null,
+        unit: m.storage_unit || null,
         name: m.storage_name || 'Disk',
       }];
     }
@@ -684,22 +781,25 @@ class PcControlCard extends HTMLElement {
     return '—';
   }
 
-  // Read a metric sensor and return both a display string and a 0–100
-  // bar percentage. Display mode is determined by whether a *_total
-  // sensor is configured:
-  //   - no total → percent display ("42%")
-  //   - with total → absolute display ("6.8 / 16 GB")
-  // Storage entries are keyed by index: 'storage_0', 'storage_1', …
+  // Resolve a metric entity (+ optional separate total entity) from hass
+  // and delegate the parsing/formatting to computeMetricDisplay. Storage
+  // entries are keyed by index: 'storage_0', 'storage_1', … and may pull
+  // their value from an attribute; for HASS.Agent (non-numeric state) the
+  // value auto-detects from the UsedSpacePercentage attribute.
   _metricValue(key) {
     const m = this._config.metrics || {};
-    let entityId, totalId;
+    let entityId, totalId, attribute = null, totalAttribute = null, autoDetect = false, unit = null;
 
     if (key === 'storage' || key.startsWith('storage_')) {
       const idx = key === 'storage' ? 0 : parseInt(key.slice(8), 10);
       const s = this._storages?.[idx];
       if (!s) return null;
-      entityId = s.entity;
-      totalId  = s.total;
+      entityId       = s.entity;
+      totalId        = s.total;
+      attribute      = s.attribute;
+      totalAttribute = s.totalAttribute;
+      unit           = s.unit;
+      autoDetect     = !s.attribute; // only fall back when no explicit attribute
     } else if (key === 'ram_usage') {
       entityId = m.ram_usage;
       totalId  = m.ram_usage_total;
@@ -711,35 +811,15 @@ class PcControlCard extends HTMLElement {
     if (!entityId) return null;
     const ent = this._hass?.states[entityId];
     if (!ent) return null;
-    const n = parseFloat(ent.state);
-    if (!Number.isFinite(n)) return null;
-    const unit = ent.attributes?.unit_of_measurement ?? '';
+    const totalEnt = totalId ? this._hass?.states[totalId] : null;
 
-    if (totalId) {
-      const totalEnt = this._hass?.states[totalId];
-      const total = totalEnt ? parseFloat(totalEnt.state) : null;
-      const space = unit ? ' ' : '';
-      if (Number.isFinite(total) && total > 0) {
-        return {
-          displayValue: `${fmtNum(n)} / ${fmtNum(total)}${space}${unit}`,
-          compactValue: `${fmtNum(n)}${space}${unit}`,
-          barPct: Math.max(0, Math.min(100, (n / total) * 100)),
-        };
-      }
-      return {
-        displayValue: `${fmtNum(n)}${space}${unit}`,
-        compactValue: `${fmtNum(n)}${space}${unit}`,
-        barPct: null,
-      };
-    }
-
-    // Percent mode
-    const pct = `${Math.round(n)}${unit || '%'}`;
-    return {
-      displayValue: pct,
-      compactValue: pct,
-      barPct: Math.max(0, Math.min(100, n)),
-    };
+    return computeMetricDisplay(ent, totalEnt, {
+      attribute,
+      totalAttribute,
+      totalConfigured: !!totalAttribute || !!totalId,
+      autoDetect,
+      unit,
+    });
   }
 
   // ── Action handlers ──────────────────────────────────────────
@@ -1330,17 +1410,26 @@ const EDITOR_SCHEMA = [
   ] },
 
   { type: 'expandable', title: 'Storage (multi-disk)', icon: 'mdi:harddisk', schema: [
-    { name: '_storage_1_entity', selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_1_total',  selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_1_name',   selector: { text: {} } },
+    { name: '_storage_1_entity',          selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_1_attribute',       selector: { text: {} } },
+    { name: '_storage_1_total',           selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_1_total_attribute', selector: { text: {} } },
+    { name: '_storage_1_unit',            selector: { text: {} } },
+    { name: '_storage_1_name',            selector: { text: {} } },
 
-    { name: '_storage_2_entity', selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_2_total',  selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_2_name',   selector: { text: {} } },
+    { name: '_storage_2_entity',          selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_2_attribute',       selector: { text: {} } },
+    { name: '_storage_2_total',           selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_2_total_attribute', selector: { text: {} } },
+    { name: '_storage_2_unit',            selector: { text: {} } },
+    { name: '_storage_2_name',            selector: { text: {} } },
 
-    { name: '_storage_3_entity', selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_3_total',  selector: { entity: { domain: 'sensor' } } },
-    { name: '_storage_3_name',   selector: { text: {} } },
+    { name: '_storage_3_entity',          selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_3_attribute',       selector: { text: {} } },
+    { name: '_storage_3_total',           selector: { entity: { domain: 'sensor' } } },
+    { name: '_storage_3_total_attribute', selector: { text: {} } },
+    { name: '_storage_3_unit',            selector: { text: {} } },
+    { name: '_storage_3_name',            selector: { text: {} } },
   ] },
 
   { type: 'expandable', title: 'Drives (NAS health)', icon: 'mdi:harddisk-plus', schema: [
@@ -1393,22 +1482,31 @@ const EDITOR_LABELS = {
   _metric_gpu_temp:        'GPU temperature sensor (°C)',
   _metric_ram_usage:       'RAM sensor (used / percent)',
   _metric_ram_usage_total: 'RAM total sensor (omit to show percent only)',
-  _storage_1_entity: 'Disk 1 · used / percent sensor',
-  _storage_1_total:  'Disk 1 · total sensor (omit for percent display)',
-  _storage_1_name:   'Disk 1 · label (e.g. "System")',
-  _storage_2_entity: 'Disk 2 · used / percent sensor',
-  _storage_2_total:  'Disk 2 · total sensor',
-  _storage_2_name:   'Disk 2 · label',
-  _storage_3_entity: 'Disk 3 · used / percent sensor',
-  _storage_3_total:  'Disk 3 · total sensor',
-  _storage_3_name:   'Disk 3 · label',
+  _storage_1_entity:          'Disk 1 · used / percent sensor',
+  _storage_1_attribute:       'Disk 1 · value attribute (e.g. UsedSpacePercentage — leave blank to use state)',
+  _storage_1_total:           'Disk 1 · total sensor (omit for percent display)',
+  _storage_1_total_attribute: 'Disk 1 · total attribute on the same entity (e.g. TotalSizeMB)',
+  _storage_1_unit:            'Disk 1 · unit the values are ALREADY in, e.g. MB (not the display unit — card auto-scales to GB/TB)',
+  _storage_1_name:            'Disk 1 · label (e.g. "System")',
+  _storage_2_entity:          'Disk 2 · used / percent sensor',
+  _storage_2_attribute:       'Disk 2 · value attribute',
+  _storage_2_total:           'Disk 2 · total sensor',
+  _storage_2_total_attribute: 'Disk 2 · total attribute',
+  _storage_2_unit:            'Disk 2 · unit the values are ALREADY in, e.g. MB (auto-scales)',
+  _storage_2_name:            'Disk 2 · label',
+  _storage_3_entity:          'Disk 3 · used / percent sensor',
+  _storage_3_attribute:       'Disk 3 · value attribute',
+  _storage_3_total:           'Disk 3 · total sensor',
+  _storage_3_total_attribute: 'Disk 3 · total attribute',
+  _storage_3_unit:            'Disk 3 · unit the values are ALREADY in, e.g. MB (auto-scales)',
+  _storage_3_name:            'Disk 3 · label',
   _drive_1_status: 'Drive 1 · status sensor', _drive_1_temp: 'Drive 1 · temperature sensor', _drive_1_name: 'Drive 1 · label',
   _drive_2_status: 'Drive 2 · status sensor', _drive_2_temp: 'Drive 2 · temperature sensor', _drive_2_name: 'Drive 2 · label',
   _drive_3_status: 'Drive 3 · status sensor', _drive_3_temp: 'Drive 3 · temperature sensor', _drive_3_name: 'Drive 3 · label',
   _drive_4_status: 'Drive 4 · status sensor', _drive_4_temp: 'Drive 4 · temperature sensor', _drive_4_name: 'Drive 4 · label',
 };
 
-class PcControlCardEditor extends HTMLElement {
+class PcControlCardEditor extends HTMLElementBase {
   constructor() {
     super();
     this.attachShadow({ mode: 'open' });
@@ -1438,9 +1536,12 @@ class PcControlCardEditor extends HTMLElement {
     const storages = Array.isArray(m.storages) ? m.storages : [];
     for (let i = 0; i < STORAGE_SLOTS; i++) {
       const s = storages[i] || {};
-      flat[`_storage_${i + 1}_entity`] = s.entity;
-      flat[`_storage_${i + 1}_total`]  = s.total;
-      flat[`_storage_${i + 1}_name`]   = s.name;
+      flat[`_storage_${i + 1}_entity`]          = s.entity;
+      flat[`_storage_${i + 1}_attribute`]       = s.attribute;
+      flat[`_storage_${i + 1}_total`]           = s.total;
+      flat[`_storage_${i + 1}_total_attribute`] = s.total_attribute;
+      flat[`_storage_${i + 1}_unit`]            = s.unit;
+      flat[`_storage_${i + 1}_name`]            = s.name;
     }
 
     const drives = Array.isArray(migrated.drives) ? migrated.drives : [];
@@ -1470,12 +1571,18 @@ class PcControlCardEditor extends HTMLElement {
       const entity = next[`_storage_${i}_entity`];
       if (entity) {
         const item = { entity };
-        if (next[`_storage_${i}_total`]) item.total = next[`_storage_${i}_total`];
-        if (next[`_storage_${i}_name`])  item.name  = next[`_storage_${i}_name`];
+        if (next[`_storage_${i}_attribute`])       item.attribute       = next[`_storage_${i}_attribute`];
+        if (next[`_storage_${i}_total`])           item.total           = next[`_storage_${i}_total`];
+        if (next[`_storage_${i}_total_attribute`]) item.total_attribute = next[`_storage_${i}_total_attribute`];
+        if (next[`_storage_${i}_unit`])            item.unit            = next[`_storage_${i}_unit`];
+        if (next[`_storage_${i}_name`])            item.name            = next[`_storage_${i}_name`];
         storages.push(item);
       }
       delete next[`_storage_${i}_entity`];
+      delete next[`_storage_${i}_attribute`];
       delete next[`_storage_${i}_total`];
+      delete next[`_storage_${i}_total_attribute`];
+      delete next[`_storage_${i}_unit`];
       delete next[`_storage_${i}_name`];
     }
     if (storages.length) metrics.storages = storages;
@@ -1532,27 +1639,32 @@ class PcControlCardEditor extends HTMLElement {
   }
 }
 
-if (!customElements.get('pc-control-card-editor')) {
-  customElements.define('pc-control-card-editor', PcControlCardEditor);
-}
-
 // ── Register ────────────────────────────────────────────────────────
+// Guarded so importing this module under Node (for tests) is a no-op —
+// these globals only exist in the browser.
 
-if (!customElements.get('pc-control-card')) {
-  customElements.define('pc-control-card', PcControlCard);
+if (typeof customElements !== 'undefined') {
+  if (!customElements.get('pc-control-card-editor')) {
+    customElements.define('pc-control-card-editor', PcControlCardEditor);
+  }
+  if (!customElements.get('pc-control-card')) {
+    customElements.define('pc-control-card', PcControlCard);
+  }
 }
 
-window.customCards = window.customCards || [];
-window.customCards.push({
-  type: 'pc-control-card',
-  name: 'PC Control Card',
-  description: 'Tile, chip, or full feature card for controlling a PC (turn on / sleep / shutdown) with live CPU/RAM/GPU metrics.',
-  preview: false,
-});
+if (typeof window !== 'undefined') {
+  window.customCards = window.customCards || [];
+  window.customCards.push({
+    type: 'pc-control-card',
+    name: 'PC Control Card',
+    description: 'Tile, chip, or full feature card for controlling a PC (turn on / sleep / shutdown) with live CPU/RAM/GPU metrics.',
+    preview: false,
+  });
 
-/* eslint-disable no-console */
-console.info(
-  `%c PC-CONTROL-CARD %c v${CARD_VERSION} `,
-  'color: white; background: #3a7bd5; font-weight: 700; border-radius: 3px 0 0 3px; padding: 1px 4px;',
-  'color: #3a7bd5; background: #f1f5f9; border-radius: 0 3px 3px 0; padding: 1px 4px;'
-);
+  /* eslint-disable no-console */
+  console.info(
+    `%c PC-CONTROL-CARD %c v${CARD_VERSION} `,
+    'color: white; background: #3a7bd5; font-weight: 700; border-radius: 3px 0 0 3px; padding: 1px 4px;',
+    'color: #3a7bd5; background: #f1f5f9; border-radius: 0 3px 3px 0; padding: 1px 4px;'
+  );
+}

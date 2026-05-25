@@ -277,7 +277,7 @@
         <button data-metric="gpu_usage" class="active">GPU</button>
         <button data-metric="gpu_temp">GPU°</button>
         <button data-metric="ram_usage" class="active">RAM</button>
-        <button data-metric="storage">Disk</button>
+        <button data-metric="storage" class="active">Disk</button>
       </div>
 
       <span class="ctrl-label" style="margin-left: 12px;">RAM</span>
@@ -381,17 +381,16 @@
     'sensor.my_pc_ram_percent':     { state: '42',  changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.my_pc_gpu_load':        { state: '51',  changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.my_pc_gpu_temp':        { state: '62',  changed: 0, attrs: { unit_of_measurement: '°C' } },
-    'sensor.my_pc_storage_percent': { state: '67',  changed: 0, attrs: { unit_of_measurement: '%' } },
-    // Absolute-mode counterparts (used + total). Demo toggles between
+    // RAM absolute-mode counterparts (used + total). Demo toggles between
     // percent and absolute by swapping the entity ids passed to setConfig.
     'sensor.my_pc_ram_used':        { state: '6.8', changed: 0, attrs: { unit_of_measurement: 'GB' } },
     'sensor.my_pc_ram_total':       { state: '16',  changed: 0, attrs: { unit_of_measurement: 'GB' } },
-    'sensor.my_pc_storage_used':    { state: '340', changed: 0, attrs: { unit_of_measurement: 'GB' } },
-    'sensor.my_pc_storage_total':   { state: '500', changed: 0, attrs: { unit_of_measurement: 'GB' } },
-    // Second disk — demonstrates multi-disk support.
-    'sensor.my_pc_storage2_percent':{ state: '23',  changed: 0, attrs: { unit_of_measurement: '%' } },
-    'sensor.my_pc_storage2_used':   { state: '1.2', changed: 0, attrs: { unit_of_measurement: 'TB' } },
-    'sensor.my_pc_storage2_total':  { state: '4',   changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    // Disks modelled exactly like HASS.Agent's Storage sensor: the state is
+    // the volume label (non-numeric) and the figures live in attributes — so
+    // the demo runs the card's auto-detect / attribute / unit code paths and
+    // the snippet below is the real config that produces it.
+    'sensor.my_pc_storage_c': { state: 'Windows', changed: 0, attrs: { Name: 'C', UsedSpacePercentage: 84, UsedSpaceMB: 419000, TotalSizeMB: 499360 } },
+    'sensor.my_pc_storage_d': { state: 'Data',    changed: 0, attrs: { Name: 'D', UsedSpacePercentage: 23, UsedSpaceMB: 920000, TotalSizeMB: 4000000 } },
   };
 
   const listeners = new Set();
@@ -467,7 +466,7 @@
       gpu_usage: true,
       gpu_temp:  false,
       ram_usage: true,
-      storage:   false,
+      storage:   true,
     },
     ramUnits:  'percent',  // 'percent' | 'absolute' (RAM display)
     diskUnits: 'percent',  // 'percent' | 'absolute' (Disk display, independent)
@@ -500,19 +499,16 @@
         gpu_temp:  'sensor.my_pc_gpu_temp',
         ram_usage:       ramAbs ? 'sensor.my_pc_ram_used'  : 'sensor.my_pc_ram_percent',
         ram_usage_total: ramAbs ? 'sensor.my_pc_ram_total' : undefined,
-        // Always supply two disks so multi-disk rendering is visible
-        // when the Storage toggle is enabled.
-        storages: [
-          {
-            entity: diskAbs ? 'sensor.my_pc_storage_used'  : 'sensor.my_pc_storage_percent',
-            total:  diskAbs ? 'sensor.my_pc_storage_total' : undefined,
-            name:   'System',
-          },
-          {
-            entity: diskAbs ? 'sensor.my_pc_storage2_used'  : 'sensor.my_pc_storage2_percent',
-            total:  diskAbs ? 'sensor.my_pc_storage2_total' : undefined,
-            name:   'Media',
-          },
+        // Two disks, configured exactly like the copy-paste snippet below.
+        // % mode: disk C uses zero-config auto-detect (UsedSpacePercentage),
+        // disk D names the attribute explicitly. GB mode: both read the MB
+        // attributes and let `unit: MB` auto-scale to GB/TB.
+        storages: diskAbs ? [
+          { entity: 'sensor.my_pc_storage_c', attribute: 'UsedSpaceMB', total_attribute: 'TotalSizeMB', unit: 'MB', name: 'C:' },
+          { entity: 'sensor.my_pc_storage_d', attribute: 'UsedSpaceMB', total_attribute: 'TotalSizeMB', unit: 'MB', name: 'D:' },
+        ] : [
+          { entity: 'sensor.my_pc_storage_c', name: 'C:' },
+          { entity: 'sensor.my_pc_storage_d', attribute: 'UsedSpacePercentage', name: 'D:' },
         ],
       };
       const base = {
@@ -582,21 +578,32 @@
     ] : [
       '  ram_usage: sensor.YOUR_PC_RAM_PERCENT',
     ];
-    const storageLines = diskAbs ? [
+    // Storage block only appears when the Disk metric is on, and its shape
+    // tracks the Disk %/GB toggle. It's the exact HASS.Agent config the demo
+    // cards are running, so the snippet is copy-paste-ready (swap the entity
+    // ids for your own).
+    const storageLines = !metricVis.storage ? [] : (diskAbs ? [
       '  storages:',
-      '    - entity: sensor.YOUR_DISK_1_USED   # used (GB / TB)',
-      '      total: sensor.YOUR_DISK_1_TOTAL    # total → "used / total" display',
-      '      name: System                       # optional label',
-      '    - entity: sensor.YOUR_DISK_2_USED',
-      '      total: sensor.YOUR_DISK_2_TOTAL',
-      '      name: Media',
+      '    - entity: sensor.my_pc_storage_c',
+      '      attribute: UsedSpaceMB',
+      '      total_attribute: TotalSizeMB',
+      '      unit: MB                  # → renders "409 / 488 GB", auto-scaling to TB as needed',
+      '      name: "C:"',
+      '    - entity: sensor.my_pc_storage_d',
+      '      attribute: UsedSpaceMB',
+      '      total_attribute: TotalSizeMB',
+      '      unit: MB',
+      '      name: "D:"',
     ] : [
       '  storages:',
-      '    - entity: sensor.YOUR_DISK_1_PERCENT  # no total → percent display',
-      '      name: System',
-      '    - entity: sensor.YOUR_DISK_2_PERCENT',
-      '      name: Media',
-    ];
+      '    # Zero-config: a non-numeric state auto-detects `UsedSpacePercentage`.',
+      '    - entity: sensor.my_pc_storage_c',
+      '      name: "C:"',
+      '    # Or name the attribute explicitly (works for any attribute-based sensor):',
+      '    - entity: sensor.my_pc_storage_d',
+      '      attribute: UsedSpacePercentage',
+      '      name: "D:"',
+    ]);
 
     const yaml = [
       'type: custom:pc-control-card',
@@ -669,10 +676,8 @@
     drift('sensor.my_pc_ram_used',            5.5, 12);
     drift('sensor.my_pc_gpu_load',            35, 80);
     drift('sensor.my_pc_gpu_temp',            42, 82);
-    drift('sensor.my_pc_storage_percent',     60, 72);
-    drift('sensor.my_pc_storage_used',        320, 380);
-    drift('sensor.my_pc_storage2_percent',    20, 30);
-    drift('sensor.my_pc_storage2_used',       1.0, 1.5);
+    // Disk usage is stable — no drift; the HASS.Agent-style storage sensors
+    // hold their values in attributes anyway.
     drift('sensor.my_pc_drive1_temp',         32, 46);
     drift('sensor.my_pc_drive2_temp',         34, 48);
   }, 1500);

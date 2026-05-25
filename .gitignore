@@ -9,6 +9,10 @@ node_modules/
 .DS_Store
 Thumbs.db
 
+# Local agent tooling & design notes (not part of the published card)
+.claude/
+docs/superpowers/
+
 # Build output (none — single-file card)
 dist/
 build/
