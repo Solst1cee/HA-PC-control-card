@@ -357,6 +357,26 @@
     </div>
   </section>
 
+  <!-- ── NAS / Synology demo ─────────────────────────────────────── -->
+  <div class="grid" style="margin-top: 40px;">
+    <div class="demo-slot feature">
+      <h3>NAS · Synology (feature)</h3>
+      <p>The same card as a NAS profile: per&#8209;volume usage bars (Volume 1 &amp; 2) plus per&#8209;drive health — a status dot &amp; temperature for Drive 1 &amp; 2 — with uptime and turn&nbsp;on / restart / shut&nbsp;down. Driven entirely by the built&#8209;in Synology DSM integration; no agent on the NAS. The buttons are live too.</p>
+      <div class="card-host">
+        <pc-control-card id="card-nas"></pc-control-card>
+      </div>
+    </div>
+  </div>
+
+  <section class="install">
+    <h2>NAS config (Synology DSM)</h2>
+    <p>The exact config behind the NAS card above — swap in your own entity IDs. Per‑volume usage and per‑drive health/temperature come straight from the Synology DSM integration; pair with a Wake‑on‑LAN switch for power‑on.</p>
+    <div class="yaml-wrap">
+      <button class="copy-btn" id="copy-nas-yaml" type="button">Copy</button>
+      <pre><code id="nas-yaml-snippet"></code></pre>
+    </div>
+  </section>
+
   <div class="footer">
     Buttons in the demo above are live — clicking them mutates a mocked Home Assistant state so you can preview every transition. MIT · <a href="https://github.com/Solst1cee/HA-PC-control-card">source</a>
   </div>
@@ -372,10 +392,6 @@
     'button.my_pc_sleep':           { state: 'unknown', changed: 0, attrs: {} },
     'button.my_pc_restart':         { state: 'unknown', changed: 0, attrs: {} },
     'button.my_pc_shutdown':        { state: 'unknown', changed: 0, attrs: {} },
-    'sensor.my_pc_drive1_status':   { state: 'normal',  changed: 0, attrs: {} },
-    'sensor.my_pc_drive1_temp':     { state: '36', changed: 0, attrs: { unit_of_measurement: '°C' } },
-    'sensor.my_pc_drive2_status':   { state: 'normal',  changed: 0, attrs: {} },
-    'sensor.my_pc_drive2_temp':     { state: '41', changed: 0, attrs: { unit_of_measurement: '°C' } },
     'sensor.my_pc_cpu_percent':     { state: '18',  changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.my_pc_cpu_temp':        { state: '54',  changed: 0, attrs: { unit_of_measurement: '°C' } },
     'sensor.my_pc_ram_percent':     { state: '42',  changed: 0, attrs: { unit_of_measurement: '%' } },
@@ -391,6 +407,26 @@
     // the snippet below is the real config that produces it.
     'sensor.my_pc_storage_c': { state: 'Windows', changed: 0, attrs: { Name: 'C', UsedSpacePercentage: 84, UsedSpaceMB: 419000, TotalSizeMB: 499360 } },
     'sensor.my_pc_storage_d': { state: 'Data',    changed: 0, attrs: { Name: 'D', UsedSpacePercentage: 23, UsedSpaceMB: 920000, TotalSizeMB: 4000000 } },
+
+    // ── NAS (Synology DSM) demo entities ──────────────────────────
+    // Drive health is a NAS concept, so it lives only on the NAS card —
+    // never the PC cards. Names mirror what the Synology DSM integration
+    // actually exposes.
+    'binary_sensor.nas_status':         { state: 'on',  changed: -1000*60*60*24*11, attrs: {} },
+    'switch.nas_wol':                   { state: 'off', changed: 0, attrs: {} },
+    'button.nas_reboot':                { state: 'unknown', changed: 0, attrs: {} },
+    'button.nas_shutdown':              { state: 'unknown', changed: 0, attrs: {} },
+    'sensor.nas_uptime':                { state: new Date(Date.now() - (11*86400 + 4*3600) * 1000).toISOString(), changed: 0, attrs: { device_class: 'timestamp' } },
+    'sensor.nas_cpu_utilization_total': { state: '12', changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.nas_memory_usage_real':     { state: '38', changed: 0, attrs: { unit_of_measurement: '%' } },
+    'sensor.nas_volume_1_used_space':   { state: '2.1', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_volume_1_total_size':   { state: '3.6', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_volume_2_used_space':   { state: '0.8', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_volume_2_total_size':   { state: '1.8', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_1_status':        { state: 'normal', changed: 0, attrs: {} },
+    'sensor.nas_drive_1_temperature':   { state: '38', changed: 0, attrs: { unit_of_measurement: '°C' } },
+    'sensor.nas_drive_2_status':        { state: 'normal', changed: 0, attrs: {} },
+    'sensor.nas_drive_2_temperature':   { state: '41', changed: 0, attrs: { unit_of_measurement: '°C' } },
   };
 
   const listeners = new Set();
@@ -419,33 +455,38 @@
     for (const fn of listeners) fn(hass);
   }
 
-  let pendingBootTimer = null;
-  let pendingShutTimer = null;
-  let pendingSleepTimer = null;
+  // Per-device pending timers so the PC and NAS cards' mock transitions
+  // stay independent (a NAS reboot can't cancel a PC boot, etc.).
+  const T = { pc: {}, nas: {} };
 
   let hass = {
     states,
     callService(domain, service, data) {
-      const ent = data?.entity_id;
+      const ent = data?.entity_id || '';
+      // Route by entity id: NAS entities drive binary_sensor.nas_status,
+      // everything else drives binary_sensor.pc_status.
+      const dev = ent.includes('nas') ? 'nas' : 'pc';
+      const statusId = dev === 'nas' ? 'binary_sensor.nas_status' : 'binary_sensor.pc_status';
+      const t = T[dev];
       // turn_on → boot delay → status flips on
       if (domain === 'switch' && service === 'turn_on') {
-        clearTimeout(pendingBootTimer);
-        pendingBootTimer = setTimeout(() => setState('binary_sensor.pc_status', 'on'), 3200);
+        clearTimeout(t.boot);
+        t.boot = setTimeout(() => setState(statusId, 'on'), 3200);
       }
       // button.press → infer action from entity id
       if (domain === 'button' && service === 'press') {
-        if (ent?.includes('shutdown')) {
-          clearTimeout(pendingShutTimer);
-          pendingShutTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2600);
-        } else if (ent?.includes('restart') || ent?.includes('reboot')) {
+        if (ent.includes('shutdown')) {
+          clearTimeout(t.shut);
+          t.shut = setTimeout(() => setState(statusId, 'off'), 2600);
+        } else if (ent.includes('restart') || ent.includes('reboot')) {
           // Reboot: go down briefly, then back up — drives the "Restarting" overlay.
-          clearTimeout(pendingShutTimer);
-          clearTimeout(pendingBootTimer);
-          pendingShutTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 1500);
-          pendingBootTimer = setTimeout(() => setState('binary_sensor.pc_status', 'on'), 5000);
-        } else if (ent?.includes('sleep')) {
-          clearTimeout(pendingSleepTimer);
-          pendingSleepTimer = setTimeout(() => setState('binary_sensor.pc_status', 'off'), 2000);
+          clearTimeout(t.shut);
+          clearTimeout(t.boot);
+          t.shut = setTimeout(() => setState(statusId, 'off'), 1500);
+          t.boot = setTimeout(() => setState(statusId, 'on'), 5000);
+        } else if (ent.includes('sleep')) {
+          clearTimeout(t.sleep);
+          t.sleep = setTimeout(() => setState(statusId, 'off'), 2000);
         }
       }
     },
@@ -480,11 +521,74 @@
     accent:     DEFAULTS.accent,
   };
 
+  // NAS demo: fixed config (independent of the PC controls) + the matching
+  // copy-paste snippet shown beneath the card. Entity names mirror the
+  // Synology DSM integration.
+  const NAS_CONFIG = {
+    variant: 'feature',
+    name: 'Synology NAS',
+    icon: 'nas',
+    status_entity: 'binary_sensor.nas_status',
+    uptime_entity: 'sensor.nas_uptime',
+    turn_on:  'switch.nas_wol',
+    restart:  'button.nas_reboot',
+    shutdown: 'button.nas_shutdown',
+    show_sleep: false,
+    show_restart: true,
+    show_gpu_usage: false,
+    confirm_restart: false,
+    confirm_shutdown: false,
+    metrics: {
+      cpu_usage: 'sensor.nas_cpu_utilization_total',
+      ram_usage: 'sensor.nas_memory_usage_real',
+      storages: [
+        { entity: 'sensor.nas_volume_1_used_space', total: 'sensor.nas_volume_1_total_size', name: 'Volume 1' },
+        { entity: 'sensor.nas_volume_2_used_space', total: 'sensor.nas_volume_2_total_size', name: 'Volume 2' },
+      ],
+    },
+    drives: [
+      { status: 'sensor.nas_drive_1_status', temp: 'sensor.nas_drive_1_temperature', name: 'Drive 1' },
+      { status: 'sensor.nas_drive_2_status', temp: 'sensor.nas_drive_2_temperature', name: 'Drive 2' },
+    ],
+  };
+  const NAS_YAML = [
+    'type: custom:pc-control-card',
+    'variant: feature',
+    'name: Synology NAS',
+    'icon: nas',
+    'status_entity: binary_sensor.nas_status        # ping of the NAS',
+    'uptime_entity: sensor.nas_uptime               # enable in the Synology DSM integration',
+    'turn_on:  switch.nas_wol                        # Wake-on-LAN switch',
+    'restart:  button.nas_reboot                     # native Synology DSM button',
+    'shutdown: button.nas_shutdown                   # native Synology DSM button',
+    'show_sleep: false',
+    'show_restart: true',
+    'show_gpu_usage: false',
+    'metrics:',
+    '  cpu_usage: sensor.nas_cpu_utilization_total',
+    '  ram_usage: sensor.nas_memory_usage_real',
+    '  storages:                                     # one usage bar per volume',
+    '    - entity: sensor.nas_volume_1_used_space',
+    '      total:  sensor.nas_volume_1_total_size',
+    '      name: Volume 1',
+    '    - entity: sensor.nas_volume_2_used_space',
+    '      total:  sensor.nas_volume_2_total_size',
+    '      name: Volume 2',
+    'drives:                                         # one health row per physical disk',
+    '  - status: sensor.nas_drive_1_status',
+    '    temp:   sensor.nas_drive_1_temperature',
+    '    name: Drive 1',
+    '  - status: sensor.nas_drive_2_status',
+    '    temp:   sensor.nas_drive_2_temperature',
+    '    name: Drive 2',
+  ].join('\n');
+
   // Wait for the custom element to be defined before configuring.
   customElements.whenDefined('pc-control-card').then(() => {
     const tile = document.getElementById('card-tile');
     const chip = document.getElementById('card-chip');
     const feat = document.getElementById('card-feature');
+    const nas  = document.getElementById('card-nas');
 
     function configure() {
       // RAM & Disk units are chosen independently. In absolute mode,
@@ -532,10 +636,6 @@
         show_storage:   state.metricVis.storage,
         accent_color:   state.accent || null,
         metrics,
-        drives: [
-          { status: 'sensor.my_pc_drive1_status', temp: 'sensor.my_pc_drive1_temp', name: 'Drive 1' },
-          { status: 'sensor.my_pc_drive2_status', temp: 'sensor.my_pc_drive2_temp', name: 'Drive 2' },
-        ],
       };
       tile.setConfig({ ...base, variant: 'tile',    name: 'My PC' });
       chip.setConfig({ ...base, variant: 'chip',    name: 'My PC' });
@@ -554,7 +654,13 @@
     };
 
     configure();
-    const push = (h) => { tile.hass = h; chip.hass = h; feat.hass = h; };
+
+    // The NAS card has a fixed config (independent of the PC controls);
+    // set it once and render its snippet.
+    nas.setConfig(NAS_CONFIG);
+    document.getElementById('nas-yaml-snippet').textContent = NAS_YAML;
+
+    const push = (h) => { tile.hass = h; chip.hass = h; feat.hass = h; nas.hass = h; };
     listeners.add(push);
     push(hass);
     updateYaml();
@@ -612,7 +718,7 @@
       'status_entity: binary_sensor.YOUR_PC_PING   # `on` when reachable',
       'turn_on:  switch.YOUR_PC_WOL                # Wake-on-LAN switch / wake script',
       'sleep:    button.YOUR_PC_SLEEP',
-      'restart:  button.YOUR_NAS_REBOOT          # Synology DSM reboot button',
+      'restart:  button.YOUR_PC_RESTART          # optional — a restart script/button',
       'shutdown: button.YOUR_PC_SHUTDOWN',
       'confirm_shutdown: true',
       'confirm_sleep: false',
@@ -635,32 +741,29 @@
       '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
       ...ramLines,
       ...storageLines,
-      'drives:                                   # per-physical-disk health + temp',
-      '  - status: sensor.YOUR_NAS_DRIVE_1_STATUS',
-      '    temp:   sensor.YOUR_NAS_DRIVE_1_TEMP',
-      '    name: Drive 1',
-      '  - status: sensor.YOUR_NAS_DRIVE_2_STATUS',
-      '    temp:   sensor.YOUR_NAS_DRIVE_2_TEMP',
-      '    name: Drive 2',
     ].join('\n');
 
     document.getElementById('yaml-snippet').textContent = yaml;
   }
 
-  // Copy button
-  document.getElementById('copy-yaml').addEventListener('click', async (e) => {
-    const btn = e.currentTarget;
-    const text = document.getElementById('yaml-snippet').textContent;
-    try {
-      await navigator.clipboard.writeText(text);
-      btn.textContent = 'Copied!';
-      btn.classList.add('copied');
-      setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1600);
-    } catch (_) {
-      btn.textContent = 'Copy failed';
-      setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
-    }
-  });
+  // Copy buttons — the PC and NAS snippets share one handler.
+  function wireCopy(btnId, codeId) {
+    document.getElementById(btnId).addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const text = document.getElementById(codeId).textContent;
+      try {
+        await navigator.clipboard.writeText(text);
+        btn.textContent = 'Copied!';
+        btn.classList.add('copied');
+        setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('copied'); }, 1600);
+      } catch (_) {
+        btn.textContent = 'Copy failed';
+        setTimeout(() => { btn.textContent = 'Copy'; }, 1600);
+      }
+    });
+  }
+  wireCopy('copy-yaml', 'yaml-snippet');
+  wireCopy('copy-nas-yaml', 'nas-yaml-snippet');
 
   // ── Metric drift while "on" ────────────────────────────────────
   setInterval(() => {
@@ -678,8 +781,21 @@
     drift('sensor.my_pc_gpu_temp',            42, 82);
     // Disk usage is stable — no drift; the HASS.Agent-style storage sensors
     // hold their values in attributes anyway.
-    drift('sensor.my_pc_drive1_temp',         32, 46);
-    drift('sensor.my_pc_drive2_temp',         34, 48);
+  }, 1500);
+
+  // NAS metric drift — CPU/RAM % and drive temps °C (all integers); volume
+  // usage stays put, like real disks.
+  setInterval(() => {
+    if (states['binary_sensor.nas_status'].state !== 'on') return;
+    const drift = (k, lo, hi) => {
+      const cur = parseFloat(states[k].state) || (lo + hi) / 2;
+      const next = Math.max(lo, Math.min(hi, cur + (Math.random() - 0.5) * 8));
+      setState(k, next.toFixed(0));
+    };
+    drift('sensor.nas_cpu_utilization_total', 4,  35);
+    drift('sensor.nas_memory_usage_real',     30, 55);
+    drift('sensor.nas_drive_1_temperature',   34, 46);
+    drift('sensor.nas_drive_2_temperature',   36, 48);
   }, 1500);
 
   // ── Demo controls ──────────────────────────────────────────────
@@ -692,9 +808,9 @@
 
     const s = btn.dataset.state;
     // Cancel any in-flight mock transitions when forcing a state.
-    clearTimeout(pendingBootTimer);
-    clearTimeout(pendingShutTimer);
-    clearTimeout(pendingSleepTimer);
+    clearTimeout(T.pc.boot);
+    clearTimeout(T.pc.shut);
+    clearTimeout(T.pc.sleep);
 
     if (s === 'off')       setState('binary_sensor.pc_status', 'off');
     if (s === 'on')        setState('binary_sensor.pc_status', 'on');
