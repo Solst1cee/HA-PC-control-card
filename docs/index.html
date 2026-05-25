@@ -357,20 +357,36 @@
     </div>
   </section>
 
-  <!-- ── NAS / Synology demo ─────────────────────────────────────── -->
+  <!-- ── NAS demo (My NAS) ───────────────────────────────────────── -->
   <div class="grid" style="margin-top: 40px;">
-    <div class="demo-slot feature">
-      <h3>NAS · Synology (feature)</h3>
-      <p>The same card as a NAS profile: per&#8209;volume usage bars (Volume 1 &amp; 2) plus per&#8209;drive health — a status dot &amp; temperature for Drive 1 &amp; 2 — with uptime and turn&nbsp;on / restart / shut&nbsp;down. Driven entirely by the built&#8209;in Synology DSM integration; no agent on the NAS. The buttons are live too.</p>
+    <div class="demo-slot tile">
+      <h3>NAS · Tile (compact)</h3>
+      <p>Compact NAS tile — status plus turn&nbsp;on / restart / shut&nbsp;down.</p>
       <div class="card-host">
-        <pc-control-card id="card-nas"></pc-control-card>
+        <pc-control-card id="card-nas-tile"></pc-control-card>
+      </div>
+    </div>
+
+    <div class="demo-slot chip">
+      <h3>NAS · Chip</h3>
+      <p>Icon chip with inline uptime and a <code>Drives</code> healthy/total summary.</p>
+      <div class="card-host">
+        <pc-control-card id="card-nas-chip"></pc-control-card>
+      </div>
+    </div>
+
+    <div class="demo-slot feature">
+      <h3>NAS · Feature (grouped)</h3>
+      <p>Each drive shows its health (status dot &amp; temperature) with its own volumes grouped beneath it, split by a thin separator. Tested with the built&#8209;in Synology&nbsp;DSM integration; works with any integration that exposes the same entities — no agent on the NAS. Buttons are live.</p>
+      <div class="card-host">
+        <pc-control-card id="card-nas-feature"></pc-control-card>
       </div>
     </div>
   </div>
 
   <section class="install">
-    <h2>NAS config (Synology DSM)</h2>
-    <p>The exact config behind the NAS card above — swap in your own entity IDs. Per‑volume usage and per‑drive health/temperature come straight from the Synology DSM integration; pair with a Wake‑on‑LAN switch for power‑on.</p>
+    <h2>NAS config (My NAS)</h2>
+    <p>The exact config behind the NAS feature card above — swap in your own entity IDs. Each drive groups its volumes; drive health (status + temperature) and per‑volume usage come from the integration. Tested with Synology&nbsp;DSM, but any integration exposing these entities works; pair with a Wake‑on‑LAN switch for power‑on.</p>
     <div class="yaml-wrap">
       <button class="copy-btn" id="copy-nas-yaml" type="button">Copy</button>
       <pre><code id="nas-yaml-snippet"></code></pre>
@@ -419,10 +435,16 @@
     'sensor.nas_uptime':                { state: new Date(Date.now() - (11*86400 + 4*3600) * 1000).toISOString(), changed: 0, attrs: { device_class: 'timestamp' } },
     'sensor.nas_cpu_utilization_total': { state: '12', changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.nas_memory_usage_real':     { state: '38', changed: 0, attrs: { unit_of_measurement: '%' } },
-    'sensor.nas_volume_1_used_space':   { state: '2.1', changed: 0, attrs: { unit_of_measurement: 'TB' } },
-    'sensor.nas_volume_1_total_size':   { state: '3.6', changed: 0, attrs: { unit_of_measurement: 'TB' } },
-    'sensor.nas_volume_2_used_space':   { state: '0.8', changed: 0, attrs: { unit_of_measurement: 'TB' } },
-    'sensor.nas_volume_2_total_size':   { state: '1.8', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    // Drive 1's volumes
+    'sensor.nas_drive_1_volume_1_used':  { state: '2.1', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_1_volume_1_total': { state: '3.6', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_1_volume_2_used':  { state: '0.4', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_1_volume_2_total': { state: '0.9', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    // Drive 2's volumes
+    'sensor.nas_drive_2_volume_1_used':  { state: '1.0', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_2_volume_1_total': { state: '2.0', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_2_volume_2_used':  { state: '5.2', changed: 0, attrs: { unit_of_measurement: 'TB' } },
+    'sensor.nas_drive_2_volume_2_total': { state: '8.0', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_1_status':        { state: 'normal', changed: 0, attrs: {} },
     'sensor.nas_drive_1_temperature':   { state: '38', changed: 0, attrs: { unit_of_measurement: '°C' } },
     'sensor.nas_drive_2_status':        { state: 'normal', changed: 0, attrs: {} },
@@ -526,7 +548,7 @@
   // Synology DSM integration.
   const NAS_CONFIG = {
     variant: 'feature',
-    name: 'Synology NAS',
+    name: 'My NAS',
     icon: 'nas',
     status_entity: 'binary_sensor.nas_status',
     uptime_entity: 'sensor.nas_uptime',
@@ -541,20 +563,23 @@
     metrics: {
       cpu_usage: 'sensor.nas_cpu_utilization_total',
       ram_usage: 'sensor.nas_memory_usage_real',
-      storages: [
-        { entity: 'sensor.nas_volume_1_used_space', total: 'sensor.nas_volume_1_total_size', name: 'Volume 1' },
-        { entity: 'sensor.nas_volume_2_used_space', total: 'sensor.nas_volume_2_total_size', name: 'Volume 2' },
-      ],
     },
+    // Each drive groups its own volumes beneath its health header.
     drives: [
-      { status: 'sensor.nas_drive_1_status', temp: 'sensor.nas_drive_1_temperature', name: 'Drive 1' },
-      { status: 'sensor.nas_drive_2_status', temp: 'sensor.nas_drive_2_temperature', name: 'Drive 2' },
+      { status: 'sensor.nas_drive_1_status', temp: 'sensor.nas_drive_1_temperature', name: 'Drive 1', volumes: [
+        { entity: 'sensor.nas_drive_1_volume_1_used', total: 'sensor.nas_drive_1_volume_1_total', name: 'Volume 1' },
+        { entity: 'sensor.nas_drive_1_volume_2_used', total: 'sensor.nas_drive_1_volume_2_total', name: 'Volume 2' },
+      ] },
+      { status: 'sensor.nas_drive_2_status', temp: 'sensor.nas_drive_2_temperature', name: 'Drive 2', volumes: [
+        { entity: 'sensor.nas_drive_2_volume_1_used', total: 'sensor.nas_drive_2_volume_1_total', name: 'Volume 1' },
+        { entity: 'sensor.nas_drive_2_volume_2_used', total: 'sensor.nas_drive_2_volume_2_total', name: 'Volume 2' },
+      ] },
     ],
   };
   const NAS_YAML = [
     'type: custom:pc-control-card',
     'variant: feature',
-    'name: Synology NAS',
+    'name: My NAS',
     'icon: nas',
     'status_entity: binary_sensor.nas_status        # ping of the NAS',
     'uptime_entity: sensor.nas_uptime               # enable in the Synology DSM integration',
@@ -567,20 +592,27 @@
     'metrics:',
     '  cpu_usage: sensor.nas_cpu_utilization_total',
     '  ram_usage: sensor.nas_memory_usage_real',
-    '  storages:                                     # one usage bar per volume',
-    '    - entity: sensor.nas_volume_1_used_space',
-    '      total:  sensor.nas_volume_1_total_size',
-    '      name: Volume 1',
-    '    - entity: sensor.nas_volume_2_used_space',
-    '      total:  sensor.nas_volume_2_total_size',
-    '      name: Volume 2',
-    'drives:                                         # one health row per physical disk',
+    'drives:                                         # each drive groups its own volumes',
     '  - status: sensor.nas_drive_1_status',
     '    temp:   sensor.nas_drive_1_temperature',
     '    name: Drive 1',
+    '    volumes:                                    # usage bars grouped under Drive 1',
+    '      - entity: sensor.nas_drive_1_volume_1_used',
+    '        total:  sensor.nas_drive_1_volume_1_total',
+    '        name: Volume 1',
+    '      - entity: sensor.nas_drive_1_volume_2_used',
+    '        total:  sensor.nas_drive_1_volume_2_total',
+    '        name: Volume 2',
     '  - status: sensor.nas_drive_2_status',
     '    temp:   sensor.nas_drive_2_temperature',
     '    name: Drive 2',
+    '    volumes:',
+    '      - entity: sensor.nas_drive_2_volume_1_used',
+    '        total:  sensor.nas_drive_2_volume_1_total',
+    '        name: Volume 1',
+    '      - entity: sensor.nas_drive_2_volume_2_used',
+    '        total:  sensor.nas_drive_2_volume_2_total',
+    '        name: Volume 2',
   ].join('\n');
 
   // Wait for the custom element to be defined before configuring.
@@ -588,7 +620,9 @@
     const tile = document.getElementById('card-tile');
     const chip = document.getElementById('card-chip');
     const feat = document.getElementById('card-feature');
-    const nas  = document.getElementById('card-nas');
+    const nasTile = document.getElementById('card-nas-tile');
+    const nasChip = document.getElementById('card-nas-chip');
+    const nasFeat = document.getElementById('card-nas-feature');
 
     function configure() {
       // RAM & Disk units are chosen independently. In absolute mode,
@@ -655,12 +689,17 @@
 
     configure();
 
-    // The NAS card has a fixed config (independent of the PC controls);
-    // set it once and render its snippet.
-    nas.setConfig(NAS_CONFIG);
+    // The NAS cards have a fixed config (independent of the PC controls);
+    // set each variant once and render the shared snippet.
+    nasTile.setConfig({ ...NAS_CONFIG, variant: 'tile' });
+    nasChip.setConfig({ ...NAS_CONFIG, variant: 'chip' });
+    nasFeat.setConfig({ ...NAS_CONFIG, variant: 'feature' });
     document.getElementById('nas-yaml-snippet').textContent = NAS_YAML;
 
-    const push = (h) => { tile.hass = h; chip.hass = h; feat.hass = h; nas.hass = h; };
+    const push = (h) => {
+      tile.hass = h; chip.hass = h; feat.hass = h;
+      nasTile.hass = h; nasChip.hass = h; nasFeat.hass = h;
+    };
     listeners.add(push);
     push(hass);
     updateYaml();
