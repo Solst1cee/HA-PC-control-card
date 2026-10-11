@@ -7,7 +7,7 @@
 <meta name="description" content="A Lovelace custom card for Home Assistant — turn on, sleep, shutdown a PC, with live CPU / GPU usage & temps, RAM, and per-disk metrics. Live demo." />
 
 <!-- The card itself, served from this same Pages site -->
-<script type="module" src="./pc-control-card.js"></script>
+<script type="module" src="./pc-control-card.js?v=1.9.1"></script>
 
 <style>
   :root {
@@ -376,8 +376,8 @@
     </div>
 
     <div class="demo-slot feature">
-      <h3>NAS · Feature (grouped)</h3>
-      <p>Each drive shows its health (status dot &amp; temperature) with its own volumes grouped beneath it, split by a thin separator. Tested with the built&#8209;in Synology&nbsp;DSM integration; works with any integration that exposes the same entities — no agent on the NAS. Buttons are live.</p>
+      <h3>NAS · Feature (drives + volumes)</h3>
+      <p>Each physical drive shows its health (status dot &amp; temperature), while logical volumes are displayed independently. Tested with the built&#8209;in Synology&nbsp;DSM integration; works with any integration that exposes the same entities — no agent on the NAS. Buttons are live.</p>
       <div class="card-host">
         <pc-control-card id="card-nas-feature"></pc-control-card>
       </div>
@@ -386,7 +386,7 @@
 
   <section class="install">
     <h2>NAS config (My NAS)</h2>
-    <p>The exact config behind the NAS feature card above — swap in your own entity IDs. Each drive groups its volumes; drive health (status + temperature) and per‑volume usage come from the integration. Tested with Synology&nbsp;DSM, but any integration exposing these entities works; pair with a Wake‑on‑LAN switch for power‑on.</p>
+    <p>The exact config behind the NAS feature card above — swap in your own entity IDs. Logical volumes are configured under <code>metrics.storages</code>, independently from physical drive health and temperature under <code>drives</code>. Tested with Synology&nbsp;DSM, but any integration exposing these entities works; pair with a Wake‑on‑LAN switch for power‑on.</p>
     <div class="yaml-wrap">
       <button class="copy-btn" id="copy-nas-yaml" type="button">Copy</button>
       <pre><code id="nas-yaml-snippet"></code></pre>
@@ -435,12 +435,11 @@
     'sensor.nas_uptime':                { state: new Date(Date.now() - (11*86400 + 4*3600) * 1000).toISOString(), changed: 0, attrs: { device_class: 'timestamp' } },
     'sensor.nas_cpu_utilization_total': { state: '12', changed: 0, attrs: { unit_of_measurement: '%' } },
     'sensor.nas_memory_usage_real':     { state: '38', changed: 0, attrs: { unit_of_measurement: '%' } },
-    // Drive 1's volumes
+    // Logical volumes are independent from physical drive health.
     'sensor.nas_drive_1_volume_1_used':  { state: '2.1', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_1_volume_1_total': { state: '3.6', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_1_volume_2_used':  { state: '0.4', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_1_volume_2_total': { state: '0.9', changed: 0, attrs: { unit_of_measurement: 'TB' } },
-    // Drive 2's volumes
     'sensor.nas_drive_2_volume_1_used':  { state: '1.0', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_2_volume_1_total': { state: '2.0', changed: 0, attrs: { unit_of_measurement: 'TB' } },
     'sensor.nas_drive_2_volume_2_used':  { state: '5.2', changed: 0, attrs: { unit_of_measurement: 'TB' } },
@@ -555,25 +554,21 @@
     turn_on:  'switch.nas_wol',
     restart:  'button.nas_reboot',
     shutdown: 'button.nas_shutdown',
-    show_sleep: false,
-    show_restart: true,
-    show_gpu_usage: false,
     confirm_restart: false,
     confirm_shutdown: false,
     metrics: {
-      cpu_usage: 'sensor.nas_cpu_utilization_total',
-      ram_usage: 'sensor.nas_memory_usage_real',
-    },
-    // Each drive groups its own volumes beneath its health header.
-    drives: [
-      { status: 'sensor.nas_drive_1_status', temp: 'sensor.nas_drive_1_temperature', name: 'Drive 1', volumes: [
+      cpu_usage: { entity: 'sensor.nas_cpu_utilization_total' },
+      ram_usage: { entity: 'sensor.nas_memory_usage_real' },
+      storages: [
         { entity: 'sensor.nas_drive_1_volume_1_used', total: 'sensor.nas_drive_1_volume_1_total', name: 'Volume 1' },
         { entity: 'sensor.nas_drive_1_volume_2_used', total: 'sensor.nas_drive_1_volume_2_total', name: 'Volume 2' },
-      ] },
-      { status: 'sensor.nas_drive_2_status', temp: 'sensor.nas_drive_2_temperature', name: 'Drive 2', volumes: [
-        { entity: 'sensor.nas_drive_2_volume_1_used', total: 'sensor.nas_drive_2_volume_1_total', name: 'Volume 1' },
-        { entity: 'sensor.nas_drive_2_volume_2_used', total: 'sensor.nas_drive_2_volume_2_total', name: 'Volume 2' },
-      ] },
+        { entity: 'sensor.nas_drive_2_volume_1_used', total: 'sensor.nas_drive_2_volume_1_total', name: 'Volume 3' },
+        { entity: 'sensor.nas_drive_2_volume_2_used', total: 'sensor.nas_drive_2_volume_2_total', name: 'Volume 4' },
+      ],
+    },
+    drives: [
+      { status: 'sensor.nas_drive_1_status', temp: 'sensor.nas_drive_1_temperature', name: 'Drive 1' },
+      { status: 'sensor.nas_drive_2_status', temp: 'sensor.nas_drive_2_temperature', name: 'Drive 2' },
     ],
   };
   const NAS_YAML = [
@@ -586,33 +581,33 @@
     'turn_on:  switch.nas_wol                        # Wake-on-LAN switch',
     'restart:  button.nas_reboot                     # native Synology DSM button',
     'shutdown: button.nas_shutdown                   # native Synology DSM button',
-    'show_sleep: false',
-    'show_restart: true',
-    'show_gpu_usage: false',
+    'confirm_restart: false',
+    'confirm_shutdown: false',
     'metrics:',
-    '  cpu_usage: sensor.nas_cpu_utilization_total',
-    '  ram_usage: sensor.nas_memory_usage_real',
-    'drives:                                         # each drive groups its own volumes',
+    '  cpu_usage:',
+    '    entity: sensor.nas_cpu_utilization_total',
+    '  ram_usage:',
+    '    entity: sensor.nas_memory_usage_real',
+    '  storages:                                      # logical volumes, independent from drives',
+    '    - entity: sensor.nas_drive_1_volume_1_used',
+    '      total: sensor.nas_drive_1_volume_1_total',
+    '      name: Volume 1',
+    '    - entity: sensor.nas_drive_1_volume_2_used',
+    '      total: sensor.nas_drive_1_volume_2_total',
+    '      name: Volume 2',
+    '    - entity: sensor.nas_drive_2_volume_1_used',
+    '      total: sensor.nas_drive_2_volume_1_total',
+    '      name: Volume 3',
+    '    - entity: sensor.nas_drive_2_volume_2_used',
+    '      total: sensor.nas_drive_2_volume_2_total',
+    '      name: Volume 4',
+    'drives:',
     '  - status: sensor.nas_drive_1_status',
     '    temp:   sensor.nas_drive_1_temperature',
     '    name: Drive 1',
-    '    volumes:                                    # usage bars grouped under Drive 1',
-    '      - entity: sensor.nas_drive_1_volume_1_used',
-    '        total:  sensor.nas_drive_1_volume_1_total',
-    '        name: Volume 1',
-    '      - entity: sensor.nas_drive_1_volume_2_used',
-    '        total:  sensor.nas_drive_1_volume_2_total',
-    '        name: Volume 2',
     '  - status: sensor.nas_drive_2_status',
     '    temp:   sensor.nas_drive_2_temperature',
     '    name: Drive 2',
-    '    volumes:',
-    '      - entity: sensor.nas_drive_2_volume_1_used',
-    '        total:  sensor.nas_drive_2_volume_1_total',
-    '        name: Volume 1',
-    '      - entity: sensor.nas_drive_2_volume_2_used',
-    '        total:  sensor.nas_drive_2_volume_2_total',
-    '        name: Volume 2',
   ].join('\n');
 
   // Wait for the custom element to be defined before configuring.
@@ -631,24 +626,26 @@
       const ramAbs  = state.ramUnits  === 'absolute';
       const diskAbs = state.diskUnits === 'absolute';
       const metrics = {
-        cpu_usage: 'sensor.my_pc_cpu_percent',
-        cpu_temp:  'sensor.my_pc_cpu_temp',
-        gpu_usage: 'sensor.my_pc_gpu_load',
-        gpu_temp:  'sensor.my_pc_gpu_temp',
-        ram_usage:       ramAbs ? 'sensor.my_pc_ram_used'  : 'sensor.my_pc_ram_percent',
-        ram_usage_total: ramAbs ? 'sensor.my_pc_ram_total' : undefined,
-        // Two disks, configured exactly like the copy-paste snippet below.
-        // % mode: disk C uses zero-config auto-detect (UsedSpacePercentage),
-        // disk D names the attribute explicitly. GB mode: both read the MB
-        // attributes and let `unit: MB` auto-scale to GB/TB.
-        storages: diskAbs ? [
+        ...(state.metricVis.cpu_usage ? { cpu_usage: { entity: 'sensor.my_pc_cpu_percent' } } : {}),
+        ...(state.metricVis.cpu_temp ? { cpu_temp: { entity: 'sensor.my_pc_cpu_temp' } } : {}),
+        ...(state.metricVis.gpu_usage ? { gpu_usage: { entity: 'sensor.my_pc_gpu_load' } } : {}),
+        ...(state.metricVis.gpu_temp ? { gpu_temp: { entity: 'sensor.my_pc_gpu_temp' } } : {}),
+        ...(state.metricVis.ram_usage ? {
+          ram_usage: {
+            entity: ramAbs ? 'sensor.my_pc_ram_used' : 'sensor.my_pc_ram_percent',
+            ...(ramAbs ? { total: 'sensor.my_pc_ram_total' } : {}),
+          },
+        } : {}),
+      };
+      if (state.metricVis.storage) {
+        metrics.storages = diskAbs ? [
           { entity: 'sensor.my_pc_storage_c', attribute: 'UsedSpaceMB', total_attribute: 'TotalSizeMB', unit: 'MB', name: 'C:' },
           { entity: 'sensor.my_pc_storage_d', attribute: 'UsedSpaceMB', total_attribute: 'TotalSizeMB', unit: 'MB', name: 'D:' },
         ] : [
           { entity: 'sensor.my_pc_storage_c', name: 'C:' },
           { entity: 'sensor.my_pc_storage_d', attribute: 'UsedSpacePercentage', name: 'D:' },
-        ],
-      };
+        ];
+      }
       const base = {
         status_entity: 'binary_sensor.pc_status',
         turn_on:  'switch.my_pc',
@@ -658,19 +655,13 @@
         confirm_shutdown: true,
         confirm_sleep: false,
         confirm_restart: false,
-        show_turn_on:   state.visibility.turn_on,
-        show_sleep:     state.visibility.sleep,
-        show_restart:   state.visibility.restart,
-        show_shutdown:  state.visibility.shutdown,
-        show_cpu_usage: state.metricVis.cpu_usage,
-        show_cpu_temp:  state.metricVis.cpu_temp,
-        show_gpu_usage: state.metricVis.gpu_usage,
-        show_gpu_temp:  state.metricVis.gpu_temp,
-        show_ram_usage: state.metricVis.ram_usage,
-        show_storage:   state.metricVis.storage,
         accent_color:   state.accent || null,
         metrics,
       };
+      if (!state.visibility.turn_on) base.turn_on = null;
+      if (!state.visibility.sleep) base.sleep = null;
+      if (!state.visibility.restart) base.restart = null;
+      if (!state.visibility.shutdown) base.shutdown = null;
       tile.setConfig({ ...base, variant: 'tile',    name: 'My PC' });
       chip.setConfig({ ...base, variant: 'chip',    name: 'My PC' });
       feat.setConfig({ ...base, variant: 'feature', name: 'My PC' });
@@ -717,12 +708,15 @@
       ? `accent_color: "${accent}"  # per‑card accent override`
       : `# accent_color: "#7a5af8"  # uncomment to override HA's theme accent`;
 
-    const ramLines = ramAbs ? [
-      '  ram_usage: sensor.YOUR_PC_RAM_USED          # numeric "used" sensor (e.g. GB)',
-      '  ram_usage_total: sensor.YOUR_PC_RAM_TOTAL    # providing total flips display to "used / total"',
-    ] : [
-      '  ram_usage: sensor.YOUR_PC_RAM_PERCENT',
-    ];
+    const metricLines = [];
+    if (metricVis.cpu_usage) metricLines.push('  cpu_usage:', '    entity: sensor.YOUR_PC_CPU_PERCENT');
+    if (metricVis.cpu_temp) metricLines.push('  cpu_temp:', '    entity: sensor.YOUR_PC_CPU_TEMP          # °C');
+    if (metricVis.gpu_usage) metricLines.push('  gpu_usage:', '    entity: sensor.YOUR_PC_GPU_LOAD');
+    if (metricVis.gpu_temp) metricLines.push('  gpu_temp:', '    entity: sensor.YOUR_PC_GPU_TEMP          # °C');
+    if (metricVis.ram_usage) {
+      metricLines.push('  ram_usage:', `    entity: ${ramAbs ? 'sensor.YOUR_PC_RAM_USED' : 'sensor.YOUR_PC_RAM_PERCENT'}`);
+      if (ramAbs) metricLines.push('    total: sensor.YOUR_PC_RAM_TOTAL');
+    }
     // Storage block only appears when the Disk metric is on, and its shape
     // tracks the Disk %/GB toggle. It's the exact HASS.Agent config the demo
     // cards are running, so the snippet is copy-paste-ready (swap the entity
@@ -755,30 +749,16 @@
       'variant: feature        # or "tile" or "chip"',
       'name: My PC',
       'status_entity: binary_sensor.YOUR_PC_PING   # `on` when reachable',
-      'turn_on:  switch.YOUR_PC_WOL                # Wake-on-LAN switch / wake script',
-      'sleep:    button.YOUR_PC_SLEEP',
-      'restart:  button.YOUR_PC_RESTART          # optional — a restart script/button',
-      'shutdown: button.YOUR_PC_SHUTDOWN',
+      ...(visibility.turn_on ? ['turn_on:  switch.YOUR_PC_WOL                # Wake-on-LAN switch / wake script'] : []),
+      ...(visibility.sleep ? ['sleep:    button.YOUR_PC_SLEEP'] : []),
+      ...(visibility.restart ? ['restart:  button.YOUR_PC_RESTART          # optional — a restart script/button'] : []),
+      ...(visibility.shutdown ? ['shutdown: button.YOUR_PC_SHUTDOWN'] : []),
       'confirm_shutdown: true',
       'confirm_sleep: false',
       'confirm_restart: true',
-      `show_turn_on:   ${visibility.turn_on}`,
-      `show_sleep:     ${visibility.sleep}`,
-      `show_restart:   ${visibility.restart}`,
-      `show_shutdown:  ${visibility.shutdown}`,
-      `show_cpu_usage: ${metricVis.cpu_usage}`,
-      `show_cpu_temp:  ${metricVis.cpu_temp}`,
-      `show_gpu_usage: ${metricVis.gpu_usage}`,
-      `show_gpu_temp:  ${metricVis.gpu_temp}`,
-      `show_ram_usage: ${metricVis.ram_usage}`,
-      `show_storage:   ${metricVis.storage}`,
       accentLine,
       'metrics:',
-      '  cpu_usage: sensor.YOUR_PC_CPU_PERCENT',
-      '  cpu_temp:  sensor.YOUR_PC_CPU_TEMP    # °C — omit if you don\'t have one',
-      '  gpu_usage: sensor.YOUR_PC_GPU_LOAD',
-      '  gpu_temp:  sensor.YOUR_PC_GPU_TEMP    # °C — omit if you don\'t have one',
-      ...ramLines,
+      ...metricLines,
       ...storageLines,
     ].join('\n');
 

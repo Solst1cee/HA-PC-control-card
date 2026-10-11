@@ -16,3 +16,5 @@ docs/superpowers/
 # Build output (none — single-file card)
 dist/
 build/
+
+bun.lock

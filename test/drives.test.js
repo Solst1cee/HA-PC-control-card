@@ -72,24 +72,23 @@ test('feature drive without a temp sensor shows capitalized status text', () => 
   card.disconnectedCallback();
 });
 
-test('show_drives:false hides feature rows and the chip summary', () => {
+test('drive rows render when drives are configured', () => {
   const feat = document.createElement('pc-control-card');
   feat.setConfig({
-    variant: 'feature', status_entity: 'binary_sensor.nas', show_drives: false,
+    variant: 'feature', status_entity: 'binary_sensor.nas',
     drives: [{ status: 'sensor.d1_status', name: 'Drive 1' }],
   });
   feat.hass = driveStates();
-  // Drives are wrapped in a .drive-group; show_drives:false hides the group.
-  assert.equal(feat.shadowRoot.querySelector('.drive-group[data-drive="0"]').style.display, 'none');
+  assert.equal(feat.shadowRoot.querySelector('.drive[data-key="drive_0"]').style.display, '');
   feat.disconnectedCallback();
 
   const chip = document.createElement('pc-control-card');
   chip.setConfig({
-    variant: 'chip', status_entity: 'binary_sensor.nas', show_drives: false,
+    variant: 'chip', status_entity: 'binary_sensor.nas',
     drives: [{ status: 'sensor.d1_status', name: 'Drive 1' }],
   });
   chip.hass = driveStates();
-  assert.equal(chip.shadowRoot.querySelector('.mini-stat[data-key="drives_summary"]').style.display, 'none');
+  assert.equal(chip.shadowRoot.querySelector('.mini-stat[data-key="drives_summary"]').style.display, '');
   chip.disconnectedCallback();
 });
 

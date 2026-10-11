@@ -121,7 +121,7 @@ test('a missing entity returns null', () => {
 // ── Card wiring (_normalizeStorages + _metricValue) ─────────────────
 
 const normalize = (config) => PcControlCard.prototype._normalizeStorages.call({ _config: config });
-const metricValue = (ctx, key) => PcControlCard.prototype._metricValue.call(ctx, key);
+const metricValue = (card, key) => card._metricValue(key);
 
 test('_normalizeStorages carries attribute / total_attribute / unit and defaults the name', () => {
   const out = normalize({ metrics: { storages: [
@@ -131,43 +131,70 @@ test('_normalizeStorages carries attribute / total_attribute / unit and defaults
     { bogus: true }, // no entity → filtered out
   ] } });
   assert.deepEqual(out, [
-    { entity: 'sensor.a', attribute: 'UsedSpacePercentage', total: null, totalAttribute: null, unit: null, name: 'Disk' },
-    { entity: 'sensor.b', attribute: null, total: null, totalAttribute: 'TotalSizeMB', unit: null, name: 'Data' },
-    { entity: 'sensor.c', attribute: 'UsedSpaceMB', total: null, totalAttribute: 'TotalSizeMB', unit: 'MB', name: 'OS' },
+    { entity: 'sensor.a', attribute: 'UsedSpacePercentage', total: null, totalAttribute: null, unit: null, display: null, name: 'Disk' },
+    { entity: 'sensor.b', attribute: null, total: null, totalAttribute: 'TotalSizeMB', unit: null, display: null, name: 'Data' },
+    { entity: 'sensor.c', attribute: 'UsedSpaceMB', total: null, totalAttribute: 'TotalSizeMB', unit: 'MB', display: null, name: 'OS' },
   ]);
 });
 
 test('_metricValue auto-detects a HASS.Agent storage entity (storage_0)', () => {
-  const ctx = {
-    _config: { metrics: {} },
-    _storages: [{ entity: 'sensor.pc_storage_c', attribute: null, total: null, totalAttribute: null, name: 'C:' }],
-    _hass: { states: { 'sensor.pc_storage_c': haAgentDisk() } },
-  };
-  assert.deepEqual(metricValue(ctx, 'storage_0'),
+  const card = new PcControlCard();
+  card.setConfig({ status_entity: 'binary_sensor.pc', metrics: { storages: [
+    { entity: 'sensor.pc_storage_c', name: 'C:' },
+  ] } });
+  card.hass = { states: { 'binary_sensor.pc': { state: 'on', attributes: {} }, 'sensor.pc_storage_c': haAgentDisk() } };
+  assert.deepEqual(metricValue(card, 'storage_0'),
     { displayValue: '50%', compactValue: '50%', barPct: 50 });
 });
 
 test('_metricValue resolves a non-zero storage index and explicit attribute', () => {
   const disk = haAgentDisk();
   disk.attributes.UsedSpacePercentage = 88;
-  const ctx = {
-    _config: { metrics: {} },
-    _storages: [
-      { entity: 'sensor.c', attribute: null, total: null, totalAttribute: null, name: 'C:' },
-      { entity: 'sensor.d', attribute: 'UsedSpacePercentage', total: null, totalAttribute: null, name: 'D:' },
-    ],
-    _hass: { states: { 'sensor.d': disk } },
-  };
-  assert.equal(metricValue(ctx, 'storage_1').displayValue, '88%');
+  const card = new PcControlCard();
+  card.setConfig({ status_entity: 'binary_sensor.pc', metrics: { storages: [
+    { entity: 'sensor.c', name: 'C:' },
+    { entity: 'sensor.d', attribute: 'UsedSpacePercentage', name: 'D:' },
+  ] } });
+  card.hass = { states: {
+    'binary_sensor.pc': { state: 'on', attributes: {} },
+    'sensor.d': disk,
+  } };
+  assert.equal(metricValue(card, 'storage_1').displayValue, '88%');
+  card.disconnectedCallback();
 });
 
 test('_metricValue scales a storage entry that declares a unit', () => {
-  const ctx = {
-    _config: { metrics: {} },
-    _storages: [{ entity: 'sensor.c', attribute: 'UsedSpaceMB', total: null, totalAttribute: 'TotalSizeMB', unit: 'MB', name: 'C:' }],
-    _hass: { states: { 'sensor.c': haAgentDisk() } },
+  const card = new PcControlCard();
+  card.setConfig({ status_entity: 'binary_sensor.pc', metrics: { storages: [
+    { entity: 'sensor.c', attribute: 'UsedSpaceMB', total_attribute: 'TotalSizeMB', unit: 'MB', name: 'C:' },
+  ] } });
+  card.hass = { states: { 'binary_sensor.pc': { state: 'on', attributes: {} }, 'sensor.c': haAgentDisk() } };
+  assert.equal(metricValue(card, 'storage_0').displayValue, '466 / 931 GB');
+  card.disconnectedCallback();
+});
+
+test('resolves native metrics from their object configuration', () => {
+  const card = new PcControlCard();
+  card.setConfig({
+    variant: 'feature',
+    status_entity: 'binary_sensor.pc',
+    metrics: {
+      cpu_usage: { entity: 'sensor.cpu', display: 'graph' },
+      ram_usage: { entity: 'sensor.ram_used', total: 'sensor.ram_total' },
+    },
+  });
+  card.hass = {
+    states: {
+      'binary_sensor.pc': { state: 'on', attributes: {} },
+      'sensor.cpu': { state: '42', attributes: { unit_of_measurement: '%' } },
+      'sensor.ram_used': { state: '6.8', attributes: { unit_of_measurement: 'GB' } },
+      'sensor.ram_total': { state: '16', attributes: {} },
+    },
   };
-  assert.equal(metricValue(ctx, 'storage_0').displayValue, '466 / 931 GB');
+  assert.equal(metricValue(card, 'cpu_usage').displayValue, '42%');
+  assert.equal(metricValue(card, 'ram_usage').displayValue, '6.80 / 16.0 GB');
+  assert.equal(card._graphKeys.has('cpu_usage'), true);
+  card.disconnectedCallback();
 });
 
 // ── Distribution invariant ──────────────────────────────────────────

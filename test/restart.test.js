@@ -11,8 +11,6 @@ function nasCard(extra = {}) {
     turn_on: 'switch.nas_wol',
     restart: 'button.nas_reboot',
     shutdown: 'button.nas_shutdown',
-    show_sleep: false,
-    show_restart: true,
     confirm_restart: false,
     ...extra,
   });
@@ -24,7 +22,7 @@ const onHass = (calls = []) => ({
   callService: (d, s, data) => calls.push([d, s, data]),
 });
 
-test('restart button visible when show_restart is true', () => {
+test('restart button visible when restart action is configured', () => {
   const card = nasCard();
   card.hass = onHass();
   assert.equal(card.shadowRoot.querySelector('.btn-restart').style.display, '');
@@ -76,15 +74,65 @@ test('confirm_restart arms on first press, fires on second', () => {
   card.disconnectedCallback();
 });
 
-test('restarting clears via the timeout fallback when the dip is never seen', () => {
+test('restarting keeps waiting when the dip is never seen before the timeout', () => {
   const card = nasCard();
   const base = (st) => ({ states: { 'binary_sensor.nas': { state: st, last_changed: new Date().toISOString(), attributes: {} } }, callService() {} });
   card.hass = base('on');
   card._onRestart();
   assert.equal(card._derivedStatus(), 'restarting');
-  // Simulate elapsed time beyond RESTART_TIMEOUT_MS (300s) without ever observing a dip.
-  card._pendingSince = Date.now() - 301_000;
-  card.hass = base('on');   // still on, never dipped
+  assert.ok(card._pendingTimer);
+  card.disconnectedCallback();
+});
+
+test('restarting clears when the status returns on after an unseen state update', () => {
+  const card = nasCard();
+  const base = (st, changedAt) => ({
+    states: {
+      'binary_sensor.nas': {
+        state: st,
+        last_changed: new Date(changedAt).toISOString(),
+        attributes: {},
+      },
+    },
+    callService() {},
+  });
+  const beforeAction = Date.now() - 1_000;
+  card.hass = base('on', beforeAction);
+  card._onRestart();
+  assert.equal(card._derivedStatus(), 'restarting');
+  card.hass = base('on', Date.now() + 1_000);
   assert.equal(card._derivedStatus(), 'on');
+  card.disconnectedCallback();
+});
+
+test('restarting clears when the status stays on after the confirmation delay', () => {
+  const card = nasCard();
+  const base = () => ({
+    states: {
+      'binary_sensor.nas': {
+        state: 'on',
+        last_changed: new Date().toISOString(),
+        attributes: {},
+      },
+    },
+    callService() {},
+  });
+  card.hass = base();
+  card._onRestart();
+  card._pendingSince = Date.now() - 3_001;
+  card.hass = base();
+  assert.equal(card._derivedStatus(), 'on');
+  card.disconnectedCallback();
+});
+
+test('timeout errors use alert styling on the whole card', () => {
+  const card = nasCard();
+  card.hass = onHass();
+  card._showActionError('restart_timeout');
+  card._update();
+  assert.equal(card._derivedStatus(), 'restart_timeout');
+  assert.match(card.shadowRoot.querySelector('.status .label').textContent, /Restart timeout/);
+  assert.equal(card.shadowRoot.querySelector('.card').classList.contains('action-error'), true);
+  assert.match(card.shadowRoot.querySelector('style').textContent, /spcCardError/);
   card.disconnectedCallback();
 });

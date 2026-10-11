@@ -1,6 +1,6 @@
 # PC Control Card
 
-A Home Assistant Lovelace custom card for controlling a PC or NAS — **turn on, sleep, shutdown** — with live CPU / RAM / GPU / storage metrics.
+A Home Assistant Lovelace custom card for controlling a PC or NAS — **turn on, sleep, restart, shutdown** — with live CPU / RAM / GPU / storage metrics and physical-drive health.
 
 ![PC Control Card preview](screenshots/preview.png)
 
@@ -10,7 +10,7 @@ Three variants in one file:
 
 - **`tile`** — compact, fits in a small dashboard slot. Tap the icon to toggle, or use the 3 action buttons below.
 - **`chip`** — Mushroom-style: icon chip + inline status + uptime, with mini CPU/GPU stats when the PC is on.
-- **`feature`** — full card with CPU / RAM / GPU / storage progress bars, uptime, and a clean action footer.
+- **`feature`** — full card with CPU / RAM / GPU / storage progress bars or graphs, physical-drive health, uptime, and a clean action footer.
 
 All three variants follow your active Home Assistant theme (light & dark) via standard CSS variables. No build step. No external dependencies. Single JS file.
 
@@ -58,6 +58,7 @@ Edit your dashboard → **Add card → Manual** → paste one of the snippets be
 type: custom:pc-control-card
 variant: tile
 name: My PC                                # heading shown on the card
+icon: mdi:desktop-tower-monitor             # optional MDI/icon-pack icon; `pc` is the default
 status_entity: binary_sensor.YOUR_PC_PING  # a sensor that's `on` when the PC is reachable (ping, agent heartbeat, WOL switch state, ...)
 turn_on:  switch.YOUR_PC_WOL               # the entity that wakes the PC — WOL switch, script, etc.
 sleep:    button.YOUR_PC_SLEEP             # a button/script your PC agent exposes for sleep
@@ -79,10 +80,13 @@ shutdown: button.YOUR_PC_SHUTDOWN
 confirm_shutdown: true
 confirm_sleep: false
 metrics:
-  cpu_usage: sensor.YOUR_PC_CPU_PERCENT  # optional — shown inline next to the status
-  ram_usage: sensor.YOUR_PC_RAM_PERCENT  # optional
-  gpu_usage: sensor.YOUR_PC_GPU_LOAD     # optional
-  storages:                         # optional — first disk shown inline on chip
+  cpu_usage:
+    entity: sensor.YOUR_PC_CPU_PERCENT  # optional — shown inline next to the status
+  ram_usage:
+    entity: sensor.YOUR_PC_RAM_PERCENT  # optional
+  gpu_usage:
+    entity: sensor.YOUR_PC_GPU_LOAD     # optional
+  storages:                         # optional — disks shown inline on chip
     - entity: sensor.YOUR_DISK_PERCENT
       name: System
 ```
@@ -100,21 +104,20 @@ shutdown: button.YOUR_PC_SHUTDOWN
 confirm_shutdown: true
 confirm_sleep: false
 
-# Hide any individual metric. Useful for NAS (no GPU): show_gpu_usage: false
-show_cpu_usage: true
-show_cpu_temp:  false   # CPU temperature bar (set true to show)
-show_gpu_usage: true
-show_gpu_temp:  false   # GPU temperature bar (set true to show)
-show_ram_usage: true
-show_storage:   true
-
 metrics:
-  cpu_usage: sensor.YOUR_PC_CPU_PERCENT       # numeric % sensor
-  cpu_temp:  sensor.YOUR_PC_CPU_TEMP          # optional °C — needs show_cpu_temp: true
-  ram_usage: sensor.YOUR_PC_RAM_PERCENT       # used % — or used "GB" sensor if pairing with ram_usage_total
-  ram_usage_total: sensor.YOUR_PC_RAM_TOTAL   # OPTIONAL: if set, RAM displays "used / total"
-  gpu_usage: sensor.YOUR_PC_GPU_LOAD
-  gpu_temp:  sensor.YOUR_PC_GPU_TEMP          # optional °C — needs show_gpu_temp: true
+  cpu_usage:
+    entity: sensor.YOUR_PC_CPU_PERCENT
+    display: bar
+  cpu_temp:
+    entity: sensor.YOUR_PC_CPU_TEMP
+  ram_usage:
+    entity: sensor.YOUR_PC_RAM_PERCENT
+    # For absolute memory values, use:
+    # total: sensor.YOUR_PC_RAM_TOTAL
+  gpu_usage:
+    entity: sensor.YOUR_PC_GPU_LOAD
+  gpu_temp:
+    entity: sensor.YOUR_PC_GPU_TEMP
   storages:                                 # one entry per disk — supports any number
     - entity: sensor.YOUR_DISK_1_USED       # sensor (used) — numeric, units come from the sensor
       total: sensor.YOUR_DISK_1_TOTAL       # OPTIONAL: if set, displays "used / total"
@@ -126,6 +129,108 @@ metrics:
 > Replace every `YOUR_PC_*` placeholder with your own entity IDs. The `turn_on` entity is whatever you already use to wake the PC — most setups use a Wake-on-LAN switch from the [`wake_on_lan`](https://www.home-assistant.io/integrations/wake_on_lan/) integration, but a `script`, `input_button`, or any service-callable entity works.
 
 You can mix both — drop the tile on a phone view and the feature card on a wall display, both pointing at the same entities.
+
+Native metric objects may use `display: graph` instead of `bar`. Graphs use recorder history and default to 24 hours; configure the period with `graph_hours` from 1 to 720:
+
+```yaml
+metrics:
+  cpu_usage:
+    entity: sensor.YOUR_PC_CPU_PERCENT
+    display: graph
+  custom:
+    - entity: sensor.YOUR_PC_FAN_SPEED
+      name: Fan
+      unit: rpm
+      display: bar
+      max: 3000
+    - entity: sensor.YOUR_PC_VERSION
+      name: Version
+```
+
+Custom metrics support `entity`, `name`, `attribute`, `unit`, `template`, `display`, `max`, `max_entity`, and `max_attribute`.
+
+### Custom metrics
+
+Custom metrics live in `metrics.custom`. They are rendered after the built-in CPU,
+GPU, RAM, and storage rows in the `chip` and `feature` variants. They are not
+rendered by the compact `tile` variant.
+
+The simplest custom row displays an entity value using its friendly name:
+
+```yaml
+metrics:
+  custom:
+    - entity: sensor.my_pc_fan_speed
+```
+
+Set `name` to control the label. Numeric values use the entity unit by default;
+`unit` overrides it. Use `attribute` when the value is stored in an entity
+attribute rather than its state:
+
+```yaml
+metrics:
+  custom:
+    - entity: sensor.my_pc_fan_speed
+      name: Fan
+      unit: rpm
+    - entity: sensor.my_pc_network
+      name: Network
+      attribute: speed
+      unit: Mbps
+```
+
+Text values are supported as well. Use `template` to format a value and,
+optionally, its maximum. The placeholders are `{value}` and `{max}`:
+
+```yaml
+metrics:
+  custom:
+    - entity: sensor.my_pc_temperature
+      name: CPU package
+      unit: "°C"
+      template: "{value}"
+    - entity: sensor.my_pc_storage_health
+      name: Health
+      template: "Status: {value}"
+```
+
+Set `display: bar` to render a progress bar in the `feature` variant. A bar
+defaults to a maximum of `100`; set a fixed `max` for another scale, or use
+`max_entity` when the maximum comes from another sensor. `max_attribute` reads
+that maximum from an attribute:
+
+```yaml
+metrics:
+  custom:
+    - entity: sensor.my_pc_fan_speed
+      name: Fan
+      unit: rpm
+      display: bar
+      max: 3000
+      template: "{value} / {max}"
+    - entity: sensor.my_pc_downloaded
+      name: Downloaded
+      unit: GB
+      display: bar
+      max_entity: sensor.my_pc_download_limit
+      template: "{value} / {max}"
+    - entity: sensor.my_pc_memory
+      name: Memory
+      attribute: used
+      display: bar
+      max_entity: sensor.my_pc_memory_info
+      max_attribute: total
+```
+
+Set `display: graph` for a historical graph in the `feature` variant. The
+entity must be recorded by Home Assistant's Recorder integration. Graphs use
+`graph_hours` (24 hours by default, from 1 to 720 hours) and automatically
+scale their range unless a maximum is configured. In the `chip` variant, custom
+rows show their compact value; templates remain available as a tooltip.
+
+Use `display: none` or omit `display` when a custom value should be shown
+without a bar or graph. A custom metric with a non-numeric value can still be
+used as a text/status row.
 
 ### NAS / Synology setup
 
@@ -146,14 +251,13 @@ uptime_entity: sensor.nas_uptime           # enable this entity in the Synology 
 turn_on:  switch.nas_wol                   # Wake-on-LAN switch
 restart:  button.nas_reboot                # native Synology DSM button
 shutdown: button.nas_shutdown              # native Synology DSM button
-show_sleep: false                          # most NAS firmware doesn't sleep
-show_restart: true                         # off by default — turn it on for a NAS
-show_gpu_usage: false                      # no GPU on a NAS
 confirm_restart: true
 confirm_shutdown: true
 metrics:
-  cpu_usage: sensor.nas_cpu_utilization_total
-  ram_usage: sensor.nas_memory_usage_real
+  cpu_usage:
+    entity: sensor.nas_cpu_utilization_total
+  ram_usage:
+    entity: sensor.nas_memory_usage_real
   storages:                                # one bar per volume
     - entity: sensor.nas_volume_1_used_space
       total:  sensor.nas_volume_1_total_size   # enable Total size in the integration
@@ -227,36 +331,22 @@ filled. For an absolute **used / total** readout, pair the MB attributes and add
 | `status_entity`    | **yes**  | entity_id                         | —                        | A `binary_sensor` that reports `on` when the PC is reachable (ping / WOL / agent heartbeat / etc.) |
 | `turn_on`          | no       | entity_id or `{entity, service}`  | —                        | Bare entity infers the service: `switch.*` → `switch.turn_on`, `button.*` → `button.press`, `script.*` → `script.turn_on`, `input_button.*` → `input_button.press`, `automation.*` → `automation.trigger` |
 | `sleep`            | no       | same                              | —                        | Same |
-| `restart`          | no       | same                              | —                        | Restart/reboot action (e.g. `button.nas_reboot`). Hidden unless `show_restart: true`. |
+| `restart`          | no       | same                              | —                        | Restart/reboot action (e.g. `button.nas_reboot`). Omit it to hide the button. |
 | `uptime_entity`    | no       | sensor entity                     | —                        | When set, uptime is read from this sensor (timestamp or numeric duration) instead of `status_entity`'s `last_changed`. |
 | `shutdown`         | no       | same                              | —                        | Same |
 | `confirm_shutdown` | no       | boolean                           | `true`                   | When true, shutdown requires a 2-tap confirm. Set `false` to fire on a single tap. |
 | `confirm_sleep`    | no       | boolean                           | `false`                  | Set `true` to require 2-tap confirm on sleep too. |
 | `confirm_restart`  | no       | boolean                           | `true`                   | 2-tap confirm for Restart (reboot interrupts service). |
-| `show_restart`     | no       | boolean                           | `false`                  | Show the Restart button. Off by default; enable for a NAS. |
-| `show_turn_on`     | no       | boolean                           | `true`                   | Set `false` to hide the Turn on button. Remaining buttons grow to fill the row. |
-| `show_sleep`       | no       | boolean                           | `true`                   | Set `false` to hide the Sleep button. |
-| `show_shutdown`    | no       | boolean                           | `true`                   | Set `false` to hide the Shut down button. |
-| `show_cpu_usage`   | no       | boolean                           | `true`                   | Show the CPU usage metric (chip + feature). |
-| `show_cpu_temp`    | no       | boolean                           | `false`                  | Show the CPU temperature metric. |
-| `show_gpu_usage`   | no       | boolean                           | `true`                   | Show the GPU usage metric. Set `false` for NAS use. |
-| `show_gpu_temp`    | no       | boolean                           | `false`                  | Show the GPU temperature metric. |
-| `show_ram_usage`   | no       | boolean                           | `true`                   | Show the RAM metric. |
-| `show_storage`     | no       | boolean                           | `true`                   | Show all volume usage rows. |
-| `show_drives`      | no       | boolean                           | `true`                   | Show the per-drive health rows (feature) / summary (chip). Only renders when `drives` is set. |
-| `icon`             | no       | `pc` \| `nas`                     | `pc`                     | Header glyph. `nas` shows stacked drive bays. |
+| `icon`             | no       | string                            | `pc`                     | Header glyph. Use the built-in `pc`/`nas`, or any installed Home Assistant icon namespace (for example `mdi:desktop-tower-monitor` or `phu:package-variant-closed`). |
 | `healthy_states`   | no       | string[]                          | `[normal, ok, healthy, good]` | Status values (case-insensitive) treated as a healthy drive. |
 | `drives`           | no       | array of `{ status, temp?, name? }` | —                      | One entry per physical disk. `status` is the text status sensor; `temp` an optional °C sensor; `name` the row label (default `Drive`, `Drive 2`, …). |
 | `accent_color`     | no       | CSS color string                  | HA's `--primary-color`   | Override the accent for this card only (e.g. `"#7a5af8"`, `"#2f9e6e"`, `"oklch(0.65 0.18 145)"`). Different PCs can have different accents without touching your theme. |
-| `metrics.cpu_usage`      | no | sensor entity                     | —                        | Feature: drives the CPU usage bar. Chip: mini stat. |
-| `metrics.cpu_temp`       | no | sensor entity                     | —                        | CPU temperature (°C). Shown when `show_cpu_temp: true`. |
-| `metrics.gpu_usage`      | no | sensor entity                     | —                        | GPU load / usage — unit follows the sensor. |
-| `metrics.gpu_temp`       | no | sensor entity                     | —                        | GPU temperature (°C). Shown when `show_gpu_temp: true`. |
-| `metrics.ram_usage`      | no | sensor entity                     | —                        | Used value. Pair with `metrics.ram_usage_total` for "used / total" display, otherwise treated as percent. |
-| `metrics.ram_usage_total`| no | sensor entity                     | —                        | When present, RAM switches from percent to absolute display (e.g. `6.8 / 16 GB`). |
-| `metrics.storages` | no       | array of `{ entity, attribute?, total?, total_attribute?, unit?, name? }` | — | One entry per disk. `entity` is required (used or percent sensor). `attribute` reads the value from an entity *attribute* instead of its state. `total` (a separate entity) or `total_attribute` (an attribute on the same entity) switches to "used / total" display. `unit` (e.g. `MB`) declares the unit the raw value is *already in* (its source unit, **not** the display unit) and auto-scales the display up to GB/TB. `name` is the label shown in the feature variant (defaults to `Disk`, `Disk 2`, …). Supports any number of disks. See [HASS.Agent storage](#hassagent-storage). |
+| `graph_hours`      | no       | number                            | `24`                    | Recorder history period for graphs, clamped to 1–720 hours. |
+| `metrics.<key>` | no | object `{ entity, display?, total?, attribute?, unit? }` | — | Native CPU/GPU/RAM metrics. `display` is `bar` or `graph` for the feature variant. |
+| `metrics.storages` | no | array of storage objects | — | Logical volume usage entries. Supports `entity`, `attribute`, `total`, `total_attribute`, `unit`, `name`, and `display`. |
+| `metrics.custom` | no | array of custom metric objects | — | Additional rows. Supports `entity`, `name`, `attribute`, `unit`, `template`, `display`, `max`, `max_entity`, and `max_attribute`. |
 
-> **Deprecated aliases:** earlier versions used `show_cpu` / `show_ram` / `show_gpu` and `metrics.cpu` / `metrics.ram` / `metrics.ram_total` / `metrics.gpu`. The card still accepts them — it migrates them to the namespaced keys above automatically — but new configs should use the canonical names.
+> **Deprecated aliases:** earlier versions used scalar `metrics.cpu`, `metrics.ram`, `metrics.ram_total`, and `metrics.gpu` values. The card still migrates them automatically, but new configurations should use metric objects.
 
 If you need a specific service (e.g. `switch.toggle` instead of `switch.turn_on`):
 
@@ -268,7 +358,7 @@ turn_on:
 
 ---
 
-If you only need one or two of the action buttons — e.g. just Turn on, or just Shut down — hide the rest:
+If you only need one or two action buttons, omit the unused action keys:
 
 ```yaml
 type: custom:pc-control-card
@@ -276,8 +366,6 @@ variant: tile
 name: My PC
 status_entity: binary_sensor.YOUR_PC_PING
 turn_on: switch.YOUR_PC_WOL
-show_sleep: false      # hide
-show_shutdown: false   # hide
 ```
 
 The remaining buttons grow to fill the row.
